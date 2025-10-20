@@ -11,8 +11,88 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r}
 library(readr)
+library(dplyr)
 
-fred_data <- read_csv("../data/FRED-MD_2025-09.csv")
+```
+
+
+```{r}
+fred_data <- read_csv("../data/2025-09-MD.csv")
 head(fred_data)
 ```
+
+```{r}
+## Transforms 
+
+transform_1 <- function(x) {
+  x
+}
+
+# First difference
+transform_2 <- function(x) {
+  x - lag(x, n = 1, default = NA)
+}
+
+# Second difference
+transform_3 <- function(x) {
+  (x - lag(x, n = 1, default = NA)) - (lag(x, n = 1, default = NA) - lag(x, n = 2, default = NA))
+}
+
+# Log transform
+transform_4 <- function(x) {
+  log(x)
+}
+
+# Log first difference
+transform_5 <- function(x) {
+  log(x) - lag(log(x), n = 1, default = NA)
+}
+
+# Log second difference
+transform_6 <- function(x) {
+  (log(x) - lag(log(x), n = 1, default = NA)) - (lag(log(x), n = 1, default = NA) - lag(log(x), n = 2, default = NA))
+}
+
+# Custom ratio transform
+transform_7 <- function(x) {
+  (x / (lag(x, n = 1, default = NA) - 1)) - (lag(x, n = 1, default = NA) / (lag(x, n = 2, default = NA) - 1))
+}
+
+```
+
+
+```{r}
+## Making dataset stationary 
+
+transform_codes <- as.numeric(fred_data[1, ])[-1]
+#print(transform_codes)
+fred_data_values <- fred_data[-1,]
+
+  print(transform_codes[126])
+
+transforms = list(
+  transform_1,
+  transform_2,
+  transform_3,
+  transform_4,
+  transform_5,
+  transform_6,
+  transform_7
+)
+
+for (i in 2:length(seq_along(fred_data_values)-1)) {
+  #print(i)
+  #print(transform_codes[i])
+  fn <- transforms[[transform_codes[i-1]]]
+  fred_data_values[[i]] <- fn(fred_data_values[[i]])
+}
+
+
+fred_data_clean <- fred_data_values %>%
+  mutate(sasdate = as.Date(sasdate)) %>%
+  filter(sasdate > as.Date("1999-12-31"))
+
+```
+
+
 
