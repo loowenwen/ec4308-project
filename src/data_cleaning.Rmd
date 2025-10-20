@@ -1,0 +1,18 @@
+---
+title: "Data Cleaning"
+author: "Loo Wen Wen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(readr)
+
+fred_data <- read_csv("../data/FRED-MD_2025-09.csv")
+head(fred_data)
+```
+
