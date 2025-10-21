@@ -12,6 +12,10 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r}
 library(readr)
 library(dplyr)
+library(lubridate)
+library(tseries)
+library(tidyverse)
+library(urca)
 
 ```
 
@@ -89,8 +93,48 @@ for (i in 2:length(seq_along(fred_data_values)-1)) {
 
 
 fred_data_clean <- fred_data_values %>%
-  mutate(sasdate = as.Date(sasdate)) %>%
+  mutate(sasdate = mdy(sasdate)) %>%
   filter(sasdate > as.Date("1999-12-31"))
+
+```
+
+```{r}
+##Checking for stationarity with ADF Test 
+
+# Normal ADF 
+fred_data_clean_adf <- fred_data_clean %>%
+  drop_na()
+
+list_of_non_stationary <- list()
+for (i in 2:ncol(fred_data_clean_adf)){
+  #print(adf.test(fred_data_clean_adf[[i]], k = 0))
+  if (adf.test(fred_data_clean_adf[[i]], k = 0)$p.value > 0.05){
+    #print(i)
+    #print(adf.test(fred_data_clean_adf[[i]]), k = 0)
+    list_of_non_stationary <- c(list_of_non_stationary, i)
+  }
+}
+
+
+# ADF with Trend 
+list_of_non_stationary_trend <- list()
+for (i in 2:ncol(fred_data_clean_adf)){
+  test_stat = ur.df(fred_data_clean_adf[[i]], type = "trend", lags = 0)@teststat[1]
+  critical_val = ur.df(fred_data_clean_adf[[i]], type = "trend", lags = 0)@cval
+  if (test_stat > critical_val[2]) {
+    #print(critical_val[2])
+    #cat(paste("Significant at", significance_levels[j], "level\n"))
+    #print(i)
+    list_of_non_stationary_trend <- c(list_of_non_stationary_trend, i)
+  }
+}
+
+print(unlist(list_of_non_stationary_trend))
+## Everything is stationary with trend 
+print(unlist(list_of_non_stationary))
+
+```
+```{r}
 
 ```
 
