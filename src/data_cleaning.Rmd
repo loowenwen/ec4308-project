@@ -16,7 +16,10 @@ library(lubridate)
 library(tseries)
 library(tidyverse)
 library(urca)
-
+library(ISLR)
+library(pls)
+library(glmnet)
+attach(Credit)
 ```
 
 
@@ -136,6 +139,28 @@ print(unlist(list_of_non_stationary))
 ```
 ```{r}
 
+```
+
+```{r}
+#helper to calc MSE
+
+MSE <- function(pred, truth){ #start and end body of the function by { } - same as a loop 
+  return(mean((truth - pred)^2)) #end function with a return(output) statement. Here we can go straight to return because the object of interest is a simple function of inputs
+}
+
+y = fred_data_clean$CPIAUCSL
+
+x_cpi <- fred_data_clean[, 107:109]
+x_g1_outputincome <- fred_data_clean[, c(2:3, 7:20)]
+x_g2_labormkt <- fred_data_clean[, c(21:48, 120:122)]
+x_g3_consumptionorders <- fred_data_clean[, 49:58]
+x_g4_ordersinv <- fred_data_clean[, c(4:6, 59:64, 123)]
+x_g5_moneycredit <- fred_data_clean[, c(65:74, 125:126)]
+x_g6_intexrates <- fred_data_clean[, 78:99]
+x_g7_prices <- fred_data_clean[, 104:119]
+x_g8_stockmkt <- fred_data_clean[, 75:77]
+all_used <- c(107:109, 2:3, 7:20, 21:48, 120:122, 49:58, 4:6, 59:64, 123, 65:74, 125:126, 78:99, 104:119, 75:77)
+x_other <- fred_data_clean[, -all_used]
 ```
 
 
