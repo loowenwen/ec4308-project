@@ -8,12 +8,36 @@ create_lags <- function(df, lags) {
   return(lagged)
 }
 
-##Preparing data to create the various z matrices 
+###MARX function### (general idea: each column is the last p lags of each variable)
+create_marx <- function(df, max_lag) {  
+  n <- nrow(df)  
+  k <- ncol(df)  
+  marx_matrix <- matrix(NA, nrow = n - max_lag, ncol = k * max_lag)  
+  
+  for (p in 1:max_lag) { 
+    for (k_idx in 1:k) {  
+      col_idx <- (p - 1) * k + k_idx 
+      x <- as.matrix(df[, k_idx])
+      x_embed <- embed(x, p)
+      # Take mean of each row of embedded lags
+      x_ma <- rowMeans(x_embed, na.rm = TRUE) / p
+      
+      # Only keep the last (n - max_lag) rows to align across all p
+      marx_matrix[, col_idx] <- tail(x_ma, n - max_lag)
+    }
+  }
+  
+  marx_df <- as.data.frame(marx_matrix)
+  colnames(marx_df) <- paste0(rep(colnames(df), each = max_lag), "_MA", 1:max_lag)
+  
+  return(marx_df)
+}
+
+###Preparing data to create the various z matrices###
 X <- fred_data_clean %>%
   select(-sasdate, -CPIAUCSL) %>%
   select(where(is.numeric)) %>%
   na.omit()
-
 
 
 #PCA to create F (take first 25)
@@ -27,6 +51,7 @@ colnames(F_t) <- paste0("F", 1:num_factors)
 p_y <- 3  #Number of lags for target 
 p_f <- 3  #Number of lags for factors 
 p_m <- 3 #Number of lags for X
+#can change lags i just put 3 for now
 
 #lagged F (LF_t)
 F_lags <- create_lags(F_t, p_f)
@@ -39,21 +64,37 @@ X_t_lags <- create_lags(X, p_m)
 
 
 
-##F case (LFt)
+
+
+
+###Setting up the various Z matrices###
+#F case (LFt)
 Z_1 <- bind_cols(
   tibble(sasdate = tail(fred_data_clean$sasdate, nrow(F_lags))),
   F_lags  
 ) %>%
   drop_na()
 
-##F-X case
+#F-X case
 Z_2 <- bind_cols(
   tibble(sasdate = tail(fred_data_values$sasdate, nrow(F_lags))),
   F_lags,
   X_t_lags
 ) %>% drop_na()
 
-##F-level case
+
+##MARX case (max_lag taken from what was suggested in the paper)
+marx_data <- fred_data_clean %>% select(-sasdate) 
+Z_11 <- create_marx(marx_data, max_lag = 12) ##MARX with y and x
+
+#F-MARX case
+Z_3 <- cbind(
+  tail(fred_data_values$sasdate, nrow(Z_11)),
+  tail(F_lags, nrow(Z_11)),
+  Z_11
+) %>% drop_na()
+
+#F-level case
 Z_5 <- bind_cols(
   tibble(sasdate = tail(fred_data_values$sasdate, nrow(F_lags))),
   tibble(y_t = tail(y_t, nrow(F_lags))), 
@@ -61,6 +102,13 @@ Z_5 <- bind_cols(
   tibble(H_t = tail(H_t, nrow(F_lags)))
 ) %>% drop_na()
 
+#F-X-MARX case
+Z_6 <- cbind(
+  tibble(sasdate = tail(fred_data_values$sasdate, nrow(Z_11))),
+  tibble(F_lags = tail(F_lags, nrow(Z_11))),
+  tibble(X_t_lags = tail(X_t_lags, nrow(Z_11))),
+  Z_11
+) %>% drop_na()
 
 ##F-X-level case 
 Z_8 <- bind_cols(
@@ -71,14 +119,29 @@ Z_8 <- bind_cols(
   tibble(H_t = tail(H_t, nrow(F_lags)))
 ) %>% drop_na()
 
-##X
+##F-X-MARX-Level
+Z_9 <- cbind(
+  tibble(sasdate = tail(fred_data_values$sasdate, nrow(Z_11))),
+  tibble(F_lags = tail(F_lags, nrow(Z_11))),
+  tibble(X_t_lags = tail(X_t_lags, nrow(Z_11))),
+  Z_11, 
+  tibble(H_t = tail(H_t, nrow(Z_11)))
+) %>% drop_na()
+
+##X case
 Z_10 <- bind_cols(
   tibble(sasdate = tail(fred_data_values$sasdate, nrow(X_t_lags))),
   X_t_lags
   ) %>% drop_na()
 
+##X-MARX case
+Z_13 <- cbind(
+  tibble(sasdate = tail(fred_data_values$sasdate, nrow(Z_11))),
+  tibble(X_t_lags = tail(X_t_lags, nrow(Z_11))),
+  Z_11
+) %>% drop_na()
 
-##X-Level
+##X-Level case
 Z_15 <- bind_cols(
   tibble(sasdate = tail(fred_data_values$sasdate, nrow(X_t_lags))),
   X_t_lags,
@@ -86,6 +149,13 @@ Z_15 <- bind_cols(
   tibble(H_t = tail(H_t, nrow(X_t_lags)))
 ) %>% drop_na()
 
+##X-MARX-Level case
+Z_16 <- cbind(
+  tibble(sasdate = tail(fred_data_values$sasdate, nrow(Z_11))),
+  tibble(X_t_lags = tail(X_t_lags, nrow(Z_11))),
+  Z_11,
+  tibble(H_t = tail(H_t, nrow(Z_11)))
+) %>% drop_na()
 
 ##Extra (F, F lag, y, y lag)
 y_lag <- create_lags(y_t, p_y)
