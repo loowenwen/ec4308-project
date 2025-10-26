@@ -1,5 +1,7 @@
 library(stats)     
-library(zoo)    
+library(zoo)   
+library(tidyverse)
+
 
 #y and x matrices
 y <- fred_data_clean$CPIAUCSL
@@ -16,6 +18,9 @@ pca_result <- prcomp(X, scale. = TRUE)
 plot(pca_result, type = "l", main = "Scree Plot of PCA Factors", npcs = 125)
 summary(pca_result)
 num_factors <- 25
+
+
+## METHOD 1: F
 
 # first 25 PCs
 F_t <- as.data.frame(pca_result$x[, 1:num_factors])
@@ -39,7 +44,7 @@ y_lags <- create_lags(tibble(y_t = y), p_y)
 F_lags <- create_lags(F_t, p_f)
 
 #Feature matrix Z (according to paper - yt, lagged versions of yt, current factors, lagged factors)
-Z_t <- bind_cols(
+Z1_t <- bind_cols(
   tibble(sasdate = tail(fred_data_clean$sasdate, nrow(X))),
   tibble(y_t = y),
   y_lags,
@@ -48,5 +53,28 @@ Z_t <- bind_cols(
 ) %>%
   drop_na()
 
-head(Z_t)  
-dim(Z_t)  
+head(Z1_t)  
+dim(Z1_t)
+
+## Method 2: F-X
+
+#Lag for x
+p_x <- 3  # Number of lags for x
+
+#lagged x
+x_lags <- create_lags(tibble(x_t = X), p_x)
+
+#Feature matrix Z (according to paper - yt, lagged versions of yt, current factors, lagged factors)
+Z2_t <- bind_cols(
+  tibble(sasdate = tail(fred_data_clean$sasdate, nrow(X))),
+  tibble(y_t = y),
+  y_lags,
+  F_t,
+  F_lags,
+  X_t,
+  X_lags
+) %>%
+  drop_na()
+
+head(Z2_t)  
+dim(Z2_t)
