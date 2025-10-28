@@ -95,7 +95,7 @@ H_t <- fred_data_values %>%
 
 #y_t
 y_t <- fred_data_clean %>%
-  na.omit %>% select(-CPIAUCSL)
+  na.omit %>% select(CPIAUCSL)
 
 #X_t
 X_t <- X
