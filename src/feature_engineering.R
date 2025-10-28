@@ -67,6 +67,7 @@ X <- fred_data_clean %>%
   na.omit()
 
 
+
 #PCA to create F (take first 25)
 pca_result <- prcomp(X, scale. = TRUE)
 plot(pca_result, type = "l", main = "Scree Plot of PCA Factors", npcs = 125)
@@ -83,13 +84,19 @@ p_m <- 3 #Number of lags for X
 #lagged F (LF_t)
 F_lags <- create_lags(F_t, p_f)
 #H_t
-H_t <- fred_data_values %>% select(-sasdate)
+H_t <- fred_data_values %>% 
+  select(-sasdate) %>%
+  na.omit 
 #y_t
-y_t <- fred_data_values$CPIAUCSL  
+y <- fred_data_clean %>%
+  na.omit %>%
+  select(CPIAUCSL)
 #X_t
 X_t <- X
 #lagged X_t (LX_t)
 X_t_lags <- create_lags(X, p_m)
+#Lagged y_t 
+y_lags <- create_lags(y, p_y)
 
 #Feature matrix Z (according to paper - yt, lagged versions of yt, current factors, lagged factors)
 Z1_t <- bind_cols(
@@ -148,6 +155,7 @@ Z_2 <- bind_cols(
 marx_data <- fred_data_clean %>% select(-sasdate) 
 Z_11 <- create_marx(marx_data, max_lag = 12) ##MARX with y and x
 
+
 #F-MARX case
 Z_3 <- cbind(
   tail(fred_data_values$sasdate, nrow(Z_11)),
@@ -159,22 +167,28 @@ Z_3 <- cbind(
 ##MAF Case
 p_maf = 12
 n_pcs = 2 #just chose 2 but can change acc to optimal oos perf 
-maf_data <- fred_data_clean %>% select(-sasdate) 
+maf_data <- fred_data_clean %>% 
+  na.omit %>% 
+  select(-sasdate) 
+
+
 Z_12 <- create_maf(maf_data, p_maf, n_pcs) ##MAF with y and x
 
 Z_4 <- cbind(
-  tail(fred_data_values$sasdate, nrow(Z_11)),
+  tail(fred_data_values$sasdate, nrow(Z_12)),
   tail(F_lags, nrow(Z_12)),
   Z_12
 ) %>% drop_na()
 
+
 #F-level case
 Z_5 <- bind_cols(
   tibble(sasdate = tail(fred_data_values$sasdate, nrow(F_lags))),
-  tibble(y_t = tail(y_t, nrow(F_lags))), 
+  tibble(y_t = tail(y, nrow(F_lags))), 
   F_lags,
   tibble(H_t = tail(H_t, nrow(F_lags)))
 ) %>% drop_na()
+
 
 #F-X-MARX case
 Z_6 <- cbind(
@@ -186,7 +200,7 @@ Z_6 <- cbind(
 
 #F-X-MAF case
 Z_7 <- cbind(
-  tibble(sasdate = tail(fred_data_values$sasdate, nrow(Z_11))),
+  tibble(sasdate = tail(fred_data_values$sasdate, nrow(Z_12))),
   tibble(F_lags = tail(F_lags, nrow(Z_12))),
   tibble(X_t_lags = tail(X_t_lags, nrow(Z_12))),
   Z_12
@@ -198,7 +212,7 @@ Z_8 <- bind_cols(
   F_lags,
   X_t_lags,
   tibble(y_t = tail(y_t, nrow(F_lags))), 
-  tibble(H_t = tail(H_t, nrow(F_lags)))
+  tibble(H_t = tail(unlist(H_t), nrow(F_lags)))
 ) %>% drop_na()
 
 ##F-X-MARX-Level
@@ -225,7 +239,7 @@ Z_13 <- cbind(
 
 ##X-MAF case
 Z_14 <- cbind(
-  tibble(sasdate = tail(fred_data_values$sasdate, nrow(Z_11))),
+  tibble(sasdate = tail(fred_data_values$sasdate, nrow(Z_12))),
   tibble(X_t_lags = tail(X_t_lags, nrow(Z_12))),
   Z_12
 ) %>% drop_na()
