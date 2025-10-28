@@ -155,7 +155,7 @@ Z_2 <- bind_cols(
 marx_data <- create_marx(fred_data_clean %>% select(-sasdate), max_lag = 12)
 Z_11 <- cbind(
   tail(sasdate = fred_data_clean$sasdate, nrow(marx_data)),
-              marx_data) %>% drop_na()
+      marx_data) %>% drop_na()
 
 
 #F-MARX case
@@ -175,14 +175,14 @@ maf_data <- create_maf((fred_data_clean %>%
 
 
 Z_12 <- cbind(
-  tail(sasdate = fred_data_clean$sasdate, nrow(maf_data)), 
+  tibble(sasdate = tail(fred_data_clean$sasdate, nrow(maf_data))),
   maf_data
 ) %>% na.omit()
 
 ##MAF with y and x
 
 Z_4 <- cbind(
-  tail(fred_data_clean$sasdate, nrow(maf_data)),
+  sasdate = tail(fred_data_clean$sasdate, nrow(maf_data)),
   tail(F_lags, nrow(maf_data)),
   maf_data
 ) %>% drop_na()
@@ -190,45 +190,45 @@ Z_4 <- cbind(
 
 #F-level case
 Z_5 <- bind_cols(
-  tibble(sasdate = tail(fred_data_clean$sasdate, nrow(F_lags))),
-  tibble(y_t = tail(y_t, nrow(F_lags))), 
+  sasdate = tail(fred_data_clean$sasdate, nrow(F_lags)),
+  y_t = tail(y_t, nrow(F_lags)), 
   F_lags,
-  tibble(H_t = tail(H_t, nrow(F_lags)))
+  H_t = tail(H_t, nrow(F_lags))
 ) %>% drop_na()
 
 
 #F-X-MARX case
 Z_6 <- cbind(
-  tibble(sasdate = tail(fred_data_clean$sasdate, nrow(Z_11))),
-  tibble(F_lags = tail(F_lags, nrow(Z_11))),
-  tibble(X_t_lags = tail(X_t_lags, nrow(Z_11))),
-  Z_11
+  sasdate = tail(fred_data_clean$sasdate, nrow(marx_data)),
+  tail(F_lags, nrow(marx_data)),
+  tail(X_t_lags, nrow(marx_data)),
+  marx_data
 ) %>% drop_na()
 
 #F-X-MAF case
 Z_7 <- cbind(
-  tibble(sasdate = tail(fred_data_clean$sasdate, nrow(Z_12))),
-  tibble(F_lags = tail(F_lags, nrow(Z_12))),
-  tibble(X_t_lags = tail(X_t_lags, nrow(Z_12))),
-  Z_12
+  sasdate = tail(fred_data_clean$sasdate, nrow(maf_data)),
+  F_lags = tail(F_lags, nrow(maf_data)),
+  X_t_lags = tail(X_t_lags, nrow(maf_data)),
+  maf_data
 ) %>% drop_na()
 
 ##F-X-level case 
 Z_8 <- bind_cols(
-  tibble(sasdate = tail(fred_data_clean$sasdate, nrow(F_lags))),
+  sasdate = tail(fred_data_clean$sasdate, nrow(F_lags)),
   F_lags,
   X_t_lags,
-  tibble(y_t = tail(y_t, nrow(F_lags))), 
-  tibble(H_t = tail(H_t, nrow(F_lags)))
+  y_t = tail(y_t, nrow(F_lags)), 
+  H_t = tail(H_t, nrow(F_lags))
 ) %>% drop_na()
 
 ##F-X-MARX-Level
 Z_9 <- cbind(
-  tibble(sasdate = tail(fred_data_clean$sasdate, nrow(Z_11))),
-  tibble(F_lags = tail(F_lags, nrow(Z_11))),
-  tibble(X_t_lags = tail(X_t_lags, nrow(Z_11))),
-  Z_11, 
-  tibble(H_t = tail(H_t, nrow(Z_11)))
+  sasdate = tail(fred_data_clean$sasdate, nrow(marx_data)),
+  F_lags = tail(F_lags, nrow(marx_data)),
+  X_t_lags = tail(X_t_lags, nrow(marx_data)),
+  marx_data, 
+  H_t = tail(H_t, nrow(marx_data))
 ) %>% drop_na()
 
 ##X case
@@ -239,32 +239,32 @@ Z_10 <- bind_cols(
 
 ##X-MARX case
 Z_13 <- cbind(
-  tibble(sasdate = tail(fred_data_clean$sasdate, nrow(Z_11))),
-  tibble(X_t_lags = tail(X_t_lags, nrow(Z_11))),
-  Z_11
+  sasdate = tail(fred_data_clean$sasdate, nrow(marx_data)),
+  X_t_lags = tail(X_t_lags, nrow(marx_data)),
+  marx_data
 ) %>% drop_na()
 
 ##X-MAF case
 Z_14 <- cbind(
-  tibble(sasdate = tail(fred_data_clean$sasdate, nrow(Z_12))),
-  tibble(X_t_lags = tail(X_t_lags, nrow(Z_12))),
-  Z_12
+  sasdate = tail(fred_data_clean$sasdate, nrow(maf_data)),
+  X_t_lags = tail(X_t_lags, nrow(maf_data)),
+  maf_data
 ) %>% drop_na()
 
 ##X-Level case
 Z_15 <- bind_cols(
-  tibble(sasdate = tail(fred_data_clean$sasdate, nrow(X_t_lags))),
+  sasdate = tail(fred_data_clean$sasdate, nrow(X_t_lags)),
   X_t_lags,
-  tibble(y_t = tail(y_t, nrow(X_t_lags))), 
-  tibble(H_t = tail(H_t, nrow(X_t_lags)))
+  y_t = tail(y_t, nrow(X_t_lags)), 
+  H_t = tail(H_t, nrow(X_t_lags))
 ) %>% drop_na()
 
 ##X-MARX-Level case
 Z_16 <- cbind(
-  tibble(sasdate = tail(fred_data_clean$sasdate, nrow(Z_11))),
-  tibble(X_t_lags = tail(X_t_lags, nrow(Z_11))),
-  Z_11,
-  tibble(H_t = tail(H_t, nrow(Z_11)))
+  sasdate = tail(fred_data_clean$sasdate, nrow(marx_data)),
+  X_t_lags = tail(X_t_lags, nrow(marx_data)),
+  marx_data,
+  H_t = tail(H_t, nrow(marx_data))
 ) %>% drop_na()
 
 
