@@ -152,34 +152,39 @@ Z_2 <- bind_cols(
 
 
 ##MARX case (max_lag taken from what was suggested in the paper)
-marx_data <- fred_data_clean %>% select(-sasdate) 
-Z_11 <- create_marx(marx_data, max_lag = 12) ##MARX with y and x
+marx_data <- create_marx(fred_data_clean %>% select(-sasdate), max_lag = 12)
+Z_11 <- cbind(
+  tail(sasdate = fred_data_clean$sasdate, nrow(marx_data)),
+              marx_data) %>% drop_na()
 
 
 #F-MARX case
 Z_3 <- cbind(
-  tail(fred_data_clean$sasdate, nrow(Z_11)),
-  tail(F_lags, nrow(Z_11)),
-  Z_11
+  tail(sasdate = fred_data_clean$sasdate, nrow(marx_data)),
+  tail(F_lags, nrow(marx_data)),
+  marx_data
 ) %>% drop_na()
 
 
 ##MAF Case
 p_maf = 12
 n_pcs = 2 #just chose 2 but can change acc to optimal oos perf 
-maf_data <- fred_data_clean %>% 
-  na.omit %>% 
-  select(-sasdate) 
+maf_data <- create_maf((fred_data_clean %>% 
+  na.omit() %>% 
+  select(-sasdate)), p_maf, n_pcs) %>% na.omit()
 
 
-Z_12 <- create_maf(maf_data, p_maf, n_pcs) %>% na.omit()
+Z_12 <- cbind(
+  tail(sasdate = fred_data_clean$sasdate, nrow(maf_data)), 
+  maf_data
+) %>% na.omit()
 
 ##MAF with y and x
 
 Z_4 <- cbind(
-  tail(fred_data_clean$sasdate, nrow(Z_12)),
-  tail(F_lags, nrow(Z_12)),
-  Z_12
+  tail(fred_data_clean$sasdate, nrow(maf_data)),
+  tail(F_lags, nrow(maf_data)),
+  maf_data
 ) %>% drop_na()
 
 
