@@ -90,18 +90,19 @@ H_t <- fred_data_values %>%
   mutate(sasdate = mdy(sasdate)) %>%  
   filter(year(sasdate) >= 2000 & year(sasdate) <= 2025) %>%  # keep only 2000-2025 rows
   select(-sasdate) %>% 
-  select(-CPIAUCSL)
+  select(-CPIAUCSL) %>%
   na.omit()
 
 #y_t
 y_t <- fred_data_clean %>%
   na.omit %>% select(-CPIAUCSL)
+
 #X_t
 X_t <- X
 #lagged X_t (LX_t)
 X_t_lags <- create_lags(X, p_m)
 #Lagged y_t 
-y_lags <- create_lags(y, p_y)
+y_lags <- create_lags(y_t, p_y) 
 
 #Feature matrix Z (according to paper - yt, lagged versions of yt, current factors, lagged factors)
 Z1_t <- bind_cols(
