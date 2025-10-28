@@ -1,0 +1,25 @@
+---
+title: "lasso"
+author: "Abigail"
+date: "2025-10-28"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Split Training and Validation Set, Test Set
+
+
+```{r cars}
+summary(cars)
+```
+
+## LASSO
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
