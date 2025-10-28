@@ -108,8 +108,6 @@ Z1_t <- bind_cols(
 ) %>%
   drop_na()
 
-head(Z1_t)  
-dim(Z1_t)
 
 ## Method 2: F-X
 
@@ -130,10 +128,6 @@ Z2_t <- bind_cols(
   x_lags
 ) %>%
   drop_na()
-
-head(Z2_t)  
-dim(Z2_t)
-
 
 ###Setting up the various Z matrices###
 #F case (LFt)
@@ -211,7 +205,7 @@ Z_8 <- bind_cols(
   tibble(sasdate = tail(fred_data_values$sasdate, nrow(F_lags))),
   F_lags,
   X_t_lags,
-  tibble(y_t = tail(y_t, nrow(F_lags))), 
+  tibble(y_t = tail(y, nrow(F_lags))), 
   tibble(H_t = tail(unlist(H_t), nrow(F_lags)))
 ) %>% drop_na()
 
@@ -248,7 +242,7 @@ Z_14 <- cbind(
 Z_15 <- bind_cols(
   tibble(sasdate = tail(fred_data_values$sasdate, nrow(X_t_lags))),
   X_t_lags,
-  tibble(y_t = tail(y_t, nrow(X_t_lags))), 
+  tibble(y_t = tail(y, nrow(X_t_lags))), 
   tibble(H_t = tail(H_t, nrow(X_t_lags)))
 ) %>% drop_na()
 
@@ -260,12 +254,4 @@ Z_16 <- cbind(
   tibble(H_t = tail(H_t, nrow(Z_11)))
 ) %>% drop_na()
 
-##Extra (F, F lag, y, y lag)
-y_lag <- create_lags(y_t, p_y)
-Z_a <- bind_cols(
-  tibble(sasdate = tail(fred_data_values$sasdate, nrow(F_lags))),
-  tibble(y_t = tail(y_t, nrow(F_lags))),
-  tibble(y_lag = tail(y_lag, nrow(F_lags))),
-  tibble(F_t = tail(F_t, nrow(F_lags))),
-  F_lags
-) %>% drop_na()
+
