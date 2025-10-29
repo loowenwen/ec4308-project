@@ -9,17 +9,179 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+
+```{r load libraries}
+library(glmnet)
+library(hdm)
+library(tidyverse)
+```
+
+```{r helper functions}
+
+RMSE <- function(pred, truth){ 
+  return(sqrt(mean((truth - pred)^2)))
+}
+
+MSE <- function(pred, truth){ 
+  return(mean((truth - pred)^2)) 
+}
+
+#scale a df using min-max from training data
+minmax_scale <- function(df) {
+  mins <- apply(df, 2, min, na.rm = TRUE)
+  maxs <- apply(df, 2, max, na.rm = TRUE)
+  
+  scaled <- sweep(df, 2, mins, "-")
+  scaled <- sweep(scaled, 2, maxs - mins, "/")
+  
+  list(scaled = scaled, mins = mins, maxs = maxs)
+}
+
+# APPLY previously fitted min-max parameters to a new dataset
+minmax_apply <- function(df, mins, maxs) {
+  scaled <- sweep(df, 2, mins, "-")
+  scaled <- sweep(scaled, 2, maxs - mins, "/")
+  return(scaled)
+}
+
+#Inverse transform (to get back actual values)
+minmax_unscale <- function(scaled, mins, maxs) {
+  unscaled <- sweep(scaled, 2, maxs - mins, "*")
+  unscaled <- sweep(unscaled, 2, mins, "+")
+  return(unscaled)
+}
+  
+```
+
+
 ## Split Training and Validation Set, Test Set
 
+```{r set}
+# minmax scaling on all predictors and Y
+scaled_part <- minmax_scale(Z_8[, !(names(Z_8) %in% c("sasdate"))])
+df_scaled <- cbind(sasdate = Z_8$sasdate, scaled_part$scaled)
 
-```{r cars}
-summary(cars)
+#subsetting training and validation set
+df_train <- df_scaled %>%
+  mutate(sasdate = as.Date(sasdate, format = "%m/%d/%Y")) %>%
+  filter(year(sasdate) < 2020)
+df_test <- df_scaled %>%
+  mutate(sasdate = as.Date(sasdate, format = "%m/%d/%Y")) %>%
+  filter(year(sasdate)> 2019)
+
+df_train_nodate = df_train %>%
+  select(-sasdate)
+df_test_nodate = df_test %>%
+  select(-sasdate)
+
+#x and y var
+Y_train <- df_train[,"CPIAUCSL"]
+Y_test <- df_test[,"CPIAUCSL"]
+X_train <- df_train %>% select(-c(sasdate, CPIAUCSL))
+X_test <- df_test %>% select(-c(sasdate, CPIAUCSL))
+
+#validation set
+nprev=60 #number of out-of-sample observations (test window )
+Y_validation = tail(Y_train,nprev) 
+X_validation = tail(X_train,nprev)
+
+# actual training set - validation
+Y_train_smaller = Y_train[1:(length(Y_train) - 60)]
+X_train_smaller = X_train[1:(length(X_train) - 60)]
 ```
+
 
 ## LASSO
 
-You can also embed plots, for example:
+```{r plug in lambda}
+# define horizons of interest
+horizons <- c(1,3,6,9,12)
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+# store results
+rmse_vec <- numeric(length(horizons))
+mse_vec <- numeric(length(horizons))
+names(rmse_vec) <- paste0("h", horizons)
+names(mse_vec) <- paste0("h", horizons)
+pred_list <- list()
+
+for(i in seq_along(horizons)){
+  h <- horizons[i]
+  
+  # shifted target for training (x1t,x2t...-> y(t+h))
+  Y_train_h <- dplyr::lead(Y_train, h)
+  valid_idx <- !is.na(Y_train_h)
+  X_train_h <- as.matrix(X_train[valid_idx, ])
+  Y_train_h <- Y_train_h[valid_idx]
+  
+  # fit rlasso
+  fit <- rlasso(X_train_h, Y_train_h, post=FALSE)
+  
+  # shifted target for test
+  Y_test_h <- dplyr::lead(Y_test, h) %>% na.omit()
+  X_test_h <- as.matrix(X_test[1:length(Y_test_h), ])
+  
+  # predict
+  yhat <- predict(fit, newdata = X_test_h)
+  pred_list[[i]] <- yhat
+  
+  # compute MSE and RMSE
+  mse <- MSE(yhat, Y_test_h)
+  mse_vec[i] <- mse
+  rmse_vec[i] <- sqrt(mse)
+}
+
+mse_vec
+rmse_vec
 ```
+
+```{r plug in lambda, post-lasso}
+
+# store results
+rmse_vec2 <- numeric(length(horizons))
+mse_vec2 <- numeric(length(horizons))
+names(rmse_vec2) <- paste0("h", horizons)
+names(mse_vec2) <- paste0("h", horizons)
+pred_list2 <- list()
+
+for(i in seq_along(horizons)){
+  h <- horizons[i]
+  
+  # shifted target for training (x1t,x2t...-> y(t+h))
+  Y_train_h <- dplyr::lead(Y_train, h)
+  valid_idx <- !is.na(Y_train_h)
+  X_train_h <- as.matrix(X_train[valid_idx, ])
+  Y_train_h <- Y_train_h[valid_idx]
+  
+  # fit rlasso
+  fit <- rlasso(X_train_h, Y_train_h, post=TRUE)
+  
+  # shifted target for test
+  Y_test_h <- dplyr::lead(Y_test, h) %>% na.omit()
+  X_test_h <- as.matrix(X_test[1:length(Y_test_h), ])
+  
+  # predict
+  yhat <- predict(fit, newdata = X_test_h)
+  pred_list2[[i]] <- yhat
+  
+  # compute MSE and RMSE
+  mse <- MSE(yhat, Y_test_h)
+  mse_vec2[i] <- mse
+  rmse_vec2[i] <- sqrt(mse)
+}
+
+mse_vec2
+rmse_vec2
+```
+
+
+```{r recursive cv}
+# setting user-defined grid
+grid = 10^seq(10, -2, length = 100)
+
+# fitting lasso model w grid
+lasso.mod <- glmnet(X_train, y[train], alpha = 1, lambda = grid)
+plot(lasso.mod)
+```
+
+
+
