@@ -1,0 +1,173 @@
+---
+title: "arima"
+author: "Melanie Gan"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load required libraries + helper functions
+```{r}
+library(dplyr)
+library(forecast)
+
+
+RMSE_fn <- function(pred, truth){ 
+  return(sqrt(mean((truth - pred)^2, na.rm = TRUE)))
+}
+```
+
+Load in dataset
+```{r}
+fred_data_clean <- read.csv("../data/fred_data_clean.csv")
+
+# only want data from 2000 to 2020
+data <- fred_data_clean %>% 
+  filter(sasdate < as.Date("2020-12-31")) 
+
+# Splitting into train-validation-test sets
+train <- data[1:180, ]
+validation <- data[181:240, ]
+test <- tail(data, 12)
+
+train_no_y <- train %>% select(-CPIAUCSL, - sasdate) %>%         #remove Y variable 
+  mutate(across(everything(), as.numeric))
+
+```
+
+
+# ARIMA MODELS 
+
+## Model 1: all X's 
+```{r}
+# Plot ACF and PACF 
+pacf(train$CPIAUCSL, main="PACF of CPIAUCSL")      # p=5
+acf(train$CPIAUCSL, main="ACF of CPIAUCSL")        # q=0
+
+#A loop to try all combinations of p= 4,5,6 and q= 0,1 to find the model that gives the lowest AIC
+p_values <- c(4,5,6)
+q_values <- c(0,1)
+d = 0
+
+val_X <- validation %>%
+  select(-CPIAUCSL, -sasdate) %>%
+  mutate(across(everything(), as.numeric))
+  
+# Convert to matrix for ARIMA()
+train_no_y <- as.matrix(train_no_y)
+val_X <- as.matrix(val_X)
+
+results <- tibble(p = integer(), q = integer(),
+                  AIC = numeric(), BIC = numeric(), RMSE = numeric())
+
+#LOOP
+for (p in p_values) {
+  for (q in q_values) {
+    fit <- Arima(train$CPIAUCSL, order = c(p, d, q), xreg = train_no_y)
+    # Forecast on validation set
+    val_forecast <- forecast(fit, xreg = val_X, h = nrow(val_X))
+    # Compute RMSE
+    rmse <- RMSE_fn(val_forecast$mean, validation$CPIAUCSL) 
+    results <- add_row(results,
+                        p = p, q = q,
+                        AIC = fit$aic,
+                        BIC = fit$bic,
+                        RMSE = rmse)
+  }
+}
+
+# Choose the best model based on RMSE
+model_1 <- results %>% arrange(RMSE) %>%
+  slice(1)
+
+# Fit the best model (p=6, q=0) with both train + validation OR train only??*********
+best_1 <- Arima(train$CPIAUCSL, order = c(model_1$p, 0 , model_1$q), xreg = train_no_y)
+
+# Forecast on test set
+test_X <- test %>%
+  select(-CPIAUCSL, -sasdate) %>%
+  mutate(across(everything(), as.numeric)) %>% 
+  mutate_all(~ifelse(is.na(.), mean(., na.rm = TRUE), .))      ## replace missing values (NA) with the mean of that same solumn
+
+test_X <- as.matrix(test_X)
+
+horizons <- c(1, 3, 6, 12)
+horizon_results <- tibble(Horizon = integer(),
+                          RMSE = numeric())
+
+
+for (h in horizons) {
+  if (h <= nrow(test)) {
+    # Forecast h steps ahead
+    test_forecast <- forecast(best_1, xreg = test_X[1:h, , drop = FALSE], h = h)
+    # Compute RMSE 
+    rmse_h <- RMSE_fn(test_forecast$mean, test$CPIAUCSL[1:h])
+    horizon_results <- add_row(horizon_results, Horizon = h, RMSE = rmse_h)
+  }
+}
+
+print(horizon_results)
+
+```
+
+
+## Model 2: First 25 PCs + Chosen X's
+
+### PCA
+```{r}
+#Normalize the data
+data_normalized <- data.frame( scale(data[, 2:127]))
+
+# Splitting into train-validation-test sets
+train_normalized <- data_normalized[1:180, ]
+validation_normalized <- data_normalized[181:240, ]
+test_normalized <- tail(data_normalized, 12)
+
+# Do PCA
+train_no_y_normal <- train_normalized %>% select(-CPIAUCSL) %>%         #remove Y variable 
+  mutate(across(everything(), as.numeric))
+
+data_pca <- prcomp(train_no_y_normal)
+summary(data_pca)    
+
+#Scree Plot
+plot(data_pca, type = "l", main = "Scree Plot of PCA Factors", npcs = 125)
+
+#Retain the first 25 PCs, it explains ~85% of the variance
+train_pca_25 <- data_pca$x[, 1:25]
+```
+
+### Model
+```{r}
+#choose X's
+#chosen_x_train <- train_no_y_normal %>% select(UNRATE, UEMPMEAN, UEMPLT5, UEMP5TO14 )
+#train_xPC <- cbind(train_no_y_normal, train_pca_25)
+#train_xPC <- as.matrix(train_xPC)
+
+train_pca_25 <- as.matrix(train_pca_25)
+results2 <- tibble(p = integer(), q = integer(),
+                  AIC = numeric(), BIC = numeric(), RMSE = numeric())
+
+#LOOP
+for (p in p_values) {
+  for (q in q_values) {
+    fit <- Arima(train$CPIAUCSL, order = c(p, d, q), xreg = train_pca_25)
+    # Forecast on validation set
+    val_forecast <- forecast(fit, xreg = val_X, h = nrow(val_X))
+    # Compute RMSE
+    rmse <- RMSE_fn(val_forecast$mean, validation$CPIAUCSL) 
+    results2 <- add_row(results,
+                        p = p, q = q,
+                        AIC = fit$aic,
+                        BIC = fit$bic,
+                        RMSE = rmse)
+  }
+}
+```
+
+
+
+
