@@ -154,13 +154,13 @@ Z_2 <- bind_cols(
 ##MARX case (max_lag taken from what was suggested in the paper)
 marx_data <- create_marx(fred_data_clean %>% select(-sasdate), max_lag = 12)
 Z_11 <- cbind(
-  tail(sasdate = fred_data_clean$sasdate, nrow(marx_data)),
-      marx_data) %>% drop_na()
+  sasdate = tail(fred_data_clean$sasdate, nrow(marx_data)),
+  marx_data) %>% drop_na()
 
 
 #F-MARX case
 Z_3 <- cbind(
-  tail(sasdate = fred_data_clean$sasdate, nrow(marx_data)),
+  sasdate = tail(fred_data_clean$sasdate, nrow(marx_data)),
   tail(F_lags, nrow(marx_data)),
   marx_data
 ) %>% drop_na()
@@ -263,8 +263,8 @@ Z_15 <- bind_cols(
 Z_16 <- cbind(
   sasdate = tail(fred_data_clean$sasdate, nrow(marx_data)),
   X_t_lags = tail(X_t_lags, nrow(marx_data)),
+  y_t = tail(y_t, nrow(marx_data)),
   marx_data,
   H_t = tail(H_t, nrow(marx_data))
-) %>% drop_na()
-
+)  %>% drop_na()
 
