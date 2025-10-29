@@ -2,11 +2,15 @@
 ## RANDOM WALK MODEL ##
 
 fred_data_clean <- read.csv("../data/fred_data_clean.csv")
+fred_data_clean <- fred_data_clean %>% 
+  filter(sasdate < as.Date("2020-12-31")) 
 
+#fred_normalized <- data.frame( scale(fred_data_clean[, 2:127]))
 #Extract Y variable (CPI inflation)
+ 
 Y <- fred_data_clean$CPIAUCSL
 
-nprev=70 #number of out-of-sample observations (test window )
+nprev=12 #number of out-of-sample observations (test window )
 
 oosy=tail(Y,nprev) #get the out-of-sample true values
 
