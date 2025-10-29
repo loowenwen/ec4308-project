@@ -174,14 +174,68 @@ rmse_vec2
 ```
 
 
-```{r recursive cv}
-# setting user-defined grid
-grid = 10^seq(10, -2, length = 100)
+```{r lasso with bic}
+rmse_vec3 <- numeric(length(horizons))
+mse_vec3 <- numeric(length(horizons))
 
-# fitting lasso model w grid
-lasso.mod <- glmnet(X_train, y[train], alpha = 1, lambda = grid)
-plot(lasso.mod)
+# setting user-defined grid
+# grid = 10^seq(10, -2, length = 100)
+
+# function to choose lambda via BIC 
+choose_lambda_bic <- function(X, Y, lambda_grid) {
+  n <- nrow(X)
+  fit <- glmnet(as.matrix(X), as.numeric(Y), alpha = 1, lambda = lambda_grid, standardize = FALSE)
+  
+  yhat <- predict(fit, as.matrix(X)) # predicted values
+  
+  # compute bic
+  rss <- colSums((yhat - as.numeric(Y))^2)
+  df <- fit$df
+  bic <- n * log(rss / n) + df * log(n)
+  
+  # choose best lambda
+  plot(bic~lambda_grid)
+  best_lambda <- lambda_grid[which.min(bic)]
+  return(best_lambda)
+}
+
+# find best lambda for all horizons FIND GOOD GRID PLSSSSS
+lambda_grid <- 10^seq(-4, 0.5, length.out = 100)
+
+best_lambdas <- c()
+
+for (h in horizons) {
+  Y_train_h <- Y_train[(1 + h):length(Y_train)]
+  X_train_h <- X_train[1:(nrow(X_train) - h), ]
+  
+  best_lambda <- choose_lambda_bic(X_train_h, Y_train_h, lambda_grid)
+  best_lambdas <- c(best_lambdas, best_lambda)
+  
+  cat("h =", h, ": best lambda (BIC) =", round(best_lambda, 6), "\n")
+  
+  # fit models with best lambda
+  fit <- glmnet(as.matrix(X_train_h), as.numeric(Y_train_h),
+                alpha = 1, lambda = best_lambda, standardize = FALSE)
+  
+  # predict on test set
+  # align test X with horizon h if needed
+  Y_test_h <- Y_test[(1 + h):length(Y_test)] #only start h steps after the first ytest obs
+  X_test_h <- X_test[1:(nrow(X_test) - h), ] #dont use the last h X obs
+  yhat <- predict(fit, as.matrix(X_test_h))
+
+  rmse <- RMSE(yhat, Y_test_h)
+  mse  <- MSE(yhat, Y_test_h)
+  mse_vec3[i] <- mse
+  rmse_vec3[i] <- rmse
+}
+
+mse_vec3
+rmse_vec3
+
 ```
 
+```{r lasso with rolling window??}
+
+```
 
 
