@@ -1,7 +1,7 @@
 ## AR MODELS WITH Y LAGS ##
 
 # load cleaned FRED data
-fred_data_clean <- read.csv("../data/fred_data_clean.csv")
+fred_data_clean <- read.csv("../data/fred_train.csv")
 
 fred_data_clean$sasdate <- as.Date(fred_data_clean$sasdate)
 
