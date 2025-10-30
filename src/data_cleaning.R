@@ -306,8 +306,21 @@ all_used <- c(107:109, 2:3, 7:20, 21:48, 120:122,
               104:119, 75:77)
 x_other <- fred_data_clean[, -all_used]
 
-# -- save clean dataset
+# -- save clean dataset --
+train_data <- fred_data_clean %>%
+  filter(sasdate <= as.Date("2019-12-01"))
 
-# Save cleaned data for later feature engineering
-write_csv(fred_data_clean, "../data/fred_clean.csv")
-cat("✅ Cleaned dataset saved to ../data/fred_clean.csv\n")
+test_data <- fred_data_clean %>%
+  filter(sasdate >= as.Date("2020-01-01"))
+
+nrow(train_data)
+nrow(test_data)
+
+summary(train_data$sasdate)
+summary(test_data$sasdate)
+
+# save training set
+write_csv(train_data, "../data/fred_train.csv")
+
+# save test set
+write_csv(test_data, "../data/fred_test.csv")
