@@ -208,10 +208,6 @@ predictors_df <- fred_data_values %>% select(-any_of("CPIAUCSL"))
 write_csv(predictors_df, "../data/predictors_transformed.csv")
 write_csv(cpi_df, "../data/cpi_target_full.csv")
 
-# Save a combined transformed dataset for reproducibility (predictors + target)
-full_transformed <- bind_cols(predictors_df, select(cpi_df, CPI_raw, CPI_t))
-write_csv(full_transformed, "../data/fred_data_transformed_full.csv")
-
 
 # ---------------------- 11. Stationarity Checks ---------------
 # Augmented Dickey-Fuller (ADF) test without trend
