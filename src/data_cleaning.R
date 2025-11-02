@@ -8,7 +8,17 @@
 ###############################################################
 
 # ---------------------- 1. Load Libaries ---------------------
-
+library(zoo)
+library(readr)
+library(dplyr)
+library(lubridate)
+library(tseries)
+library(tidyverse)
+library(urca)
+library(ISLR)
+library(pls)
+library(glmnet)
+attach(Credit)
 
 # ---------------------- 2. Import Raw Data -------------------
 # Read FRED-MD CSV (update path accordingly)
@@ -263,3 +273,4 @@ write_csv(X_train, "../data/fred_train.csv")
 write_csv(X_test, "../data/fred_test.csv")
 write_csv(y_train, "../data/y_train.csv")
 write_csv(y_test, "../data/y_test.csv")
+
