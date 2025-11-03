@@ -26,30 +26,30 @@ MSE <- function(pred, truth){
   return(mean((truth - pred)^2)) 
 }
 
-#scale a df using min-max from training data
-minmax_scale <- function(df) {
-  mins <- apply(df, 2, min, na.rm = TRUE)
-  maxs <- apply(df, 2, max, na.rm = TRUE)
-  
-  scaled <- sweep(df, 2, mins, "-")
-  scaled <- sweep(scaled, 2, maxs - mins, "/")
-  
-  list(scaled = scaled, mins = mins, maxs = maxs)
-}
-
-# APPLY previously fitted min-max parameters to a new dataset
-minmax_apply <- function(df, mins, maxs) {
-  scaled <- sweep(df, 2, mins, "-")
-  scaled <- sweep(scaled, 2, maxs - mins, "/")
-  return(scaled)
-}
-
-#Inverse transform (to get back actual values)
-minmax_unscale <- function(scaled, mins, maxs) {
-  unscaled <- sweep(scaled, 2, maxs - mins, "*")
-  unscaled <- sweep(unscaled, 2, mins, "+")
-  return(unscaled)
-}
+# #scale a df using min-max from training data
+# minmax_scale <- function(df) {
+#   mins <- apply(df, 2, min, na.rm = TRUE)
+#   maxs <- apply(df, 2, max, na.rm = TRUE)
+#   
+#   scaled <- sweep(df, 2, mins, "-")
+#   scaled <- sweep(scaled, 2, maxs - mins, "/")
+#   
+#   list(scaled = scaled, mins = mins, maxs = maxs)
+# }
+# 
+# # APPLY previously fitted min-max parameters to a new dataset
+# minmax_apply <- function(df, mins, maxs) {
+#   scaled <- sweep(df, 2, mins, "-")
+#   scaled <- sweep(scaled, 2, maxs - mins, "/")
+#   return(scaled)
+# }
+# 
+# #Inverse transform (to get back actual values)
+# minmax_unscale <- function(scaled, mins, maxs) {
+#   unscaled <- sweep(scaled, 2, maxs - mins, "*")
+#   unscaled <- sweep(unscaled, 2, mins, "+")
+#   return(unscaled)
+# }
   
 ```
 
@@ -235,6 +235,8 @@ rmse_vec3
 ```
 
 ```{r lasso with rolling window}
+horizons <- c(1,3,6,9,12)
+
 runrlasso_Z <- function(Z, y, pl = FALSE) {
   # Combine predictors and dummy if needed
   df <- as.data.frame(Z)
@@ -249,6 +251,12 @@ runrlasso_Z <- function(Z, y, pl = FALSE) {
 }
 
 rlasso.rolling.window.Z <- function(Z, y, nprev, pl = FALSE) {
+  if (length(y) > nrow(Z)) {
+    y <- tail(y, nrow(Z))
+  } else if (length(y) < nrow(Z)) {
+    Z <- Z[(nrow(Z) - length(y) + 1):nrow(Z), , drop = FALSE]
+  }
+  
   n <- length(y)
   save.pred <- rep(NA, nprev)
   
@@ -264,7 +272,7 @@ rlasso.rolling.window.Z <- function(Z, y, nprev, pl = FALSE) {
     model <- rlasso(Z_train, y_train, post = pl)
     save.pred[i] <- predict(model, newdata = Z_test)
     
-    cat("Iteration", i, "done\n")
+    #cat("Iteration", i, "done\n")
   }
   
   real <- tail(y, nprev)
@@ -274,36 +282,62 @@ rlasso.rolling.window.Z <- function(Z, y, nprev, pl = FALSE) {
   return(list(pred = save.pred, errors = c(rmse = rmse, mae = mae)))
 }
 
-Z_list = 
+all_Z_list = readRDS("all_Z_matrices.rds")
+Z_list = all_Z_list
+y = y_t$CPI_t
 nprev <- 60
 results <- list()
 
 for (z_name in names(Z_list)) {
-  Z <- Z_list[[z_name]]
+  Z_full <- Z_list[[z_name]]
+  Z <- Z_full %>% select(-sasdate)
   cat("Running for:", z_name, "\n")
   
   results[[z_name]] <- list()
+  
+  # Tail y to match Z
+  if (length(y) > nrow(Z)) {
+    y_aligned <- tail(y, nrow(Z))
+    cat("  Tailed y from", length(y), "to", length(y_aligned), "\n")
+  } else {
+    y_aligned <- y
+  }
+  
+  # Quick check: first few dates
+  cat("  First few Z dates:", head(Z_full$sasdate), "\n")
+  cat("  First few y dates:", head(y_aligned), "\n") # if y has dates, or indices if it's a vector
   
   for (h in horizons) {
     cat("  Horizon:", h, "\n")
     
     # Shift y for horizon h
-    y_h <- c(y[(h + 1):length(y)], rep(NA, h))
+    y_h <- dplyr::lead(y_aligned, h)
     
     # Run rolling window only where complete data is available
     valid_idx <- 1:(length(y_h) - h)
     
-    out <- rlasso.rolling.window.Z(Z[valid_idx, ], y_h[valid_idx], nprev = nprev, pl = FALSE)
+    cat("Length(y_h):", length(y_h), "  Horizon:", h, "\n")
+    cat("Valid_idx range:", range(valid_idx), "\n")
     
+    out <- rlasso.rolling.window.Z(Z[valid_idx, ], y_h[valid_idx], nprev = nprev, pl = FALSE)
     results[[z_name]][[paste0("h", h)]] <- out
   }
 }
+
 
 # Access example:
 # results[["Z1"]][["h3"]]$errors
 # results[["Z1"]][["h3"]]$pred
 
-
+# Loop through results and print RMSE per horizon per Z
+for (z_name in names(results)) {
+  cat("Results for:", z_name, "\n")
+  for (h in horizons) {
+    error_vec <- results[[z_name]][[paste0("h", h)]]$errors
+    cat("  Horizon", h, ": RMSE =", round(error_vec["rmse"], 4), 
+        ", MAE =", round(error_vec["mae"], 4), "\n")
+  }
+}
 ```
 
 
