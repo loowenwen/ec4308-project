@@ -99,8 +99,8 @@ create_maf <- function(df, n_lags = 12, n_pcs = 1, dates) {   # added dates
 
 # ---------------------- 2. Combining train and test sets back -------------------------
 
-X_full = rbind(X_test, X_train)
-y_full = rbind(y_test, y_train)
+X_full = rbind(X_train, X_test)
+y_full = rbind(y_train, y_test)
 
 # ---------------------- 3. Preparing factor lags (F), MARX, MAF, X lag (X_lag) -------------------------
 

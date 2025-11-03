@@ -274,6 +274,36 @@ rlasso.rolling.window.Z <- function(Z, y, nprev, pl = FALSE) {
   return(list(pred = save.pred, errors = c(rmse = rmse, mae = mae)))
 }
 
+Z_list = 
+nprev <- 60
+results <- list()
+
+for (z_name in names(Z_list)) {
+  Z <- Z_list[[z_name]]
+  cat("Running for:", z_name, "\n")
+  
+  results[[z_name]] <- list()
+  
+  for (h in horizons) {
+    cat("  Horizon:", h, "\n")
+    
+    # Shift y for horizon h
+    y_h <- c(y[(h + 1):length(y)], rep(NA, h))
+    
+    # Run rolling window only where complete data is available
+    valid_idx <- 1:(length(y_h) - h)
+    
+    out <- rlasso.rolling.window.Z(Z[valid_idx, ], y_h[valid_idx], nprev = nprev, pl = FALSE)
+    
+    results[[z_name]][[paste0("h", h)]] <- out
+  }
+}
+
+# Access example:
+# results[["Z1"]][["h3"]]$errors
+# results[["Z1"]][["h3"]]$pred
+
+
 ```
 
 
