@@ -58,14 +58,14 @@ minmax_unscale <- function(scaled, mins, maxs) {
 
 ```{r set}
 # minmax scaling on all predictors and Y
-scaled_part <- minmax_scale(Z_8[, !(names(Z_8) %in% c("sasdate"))])
-df_scaled <- cbind(sasdate = Z_8$sasdate, scaled_part$scaled)
+#scaled_part <- minmax_scale(Z_8[, !(names(Z_8) %in% c("sasdate"))])
+#df_scaled <- cbind(sasdate = Z_8$sasdate, scaled_part$scaled)
 
 #subsetting training and validation set
-df_train <- df_scaled %>%
+df_train <- Z_8 %>%
   mutate(sasdate = as.Date(sasdate, format = "%m/%d/%Y")) %>%
   filter(year(sasdate) < 2020)
-df_test <- df_scaled %>%
+df_test <- Z_8 %>%
   mutate(sasdate = as.Date(sasdate, format = "%m/%d/%Y")) %>%
   filter(year(sasdate)> 2019)
 
@@ -234,7 +234,45 @@ rmse_vec3
 
 ```
 
-```{r lasso with rolling window??}
+```{r lasso with rolling window}
+runrlasso_Z <- function(Z, y, pl = FALSE) {
+  # Combine predictors and dummy if needed
+  df <- as.data.frame(Z)
+  
+  # Fit (post-)LASSO model
+  model <- rlasso(df, y, post = pl)
+  
+  # Predict the next observation (last row of Z)
+  pred <- predict(model, newdata = tail(df, 1))
+  
+  return(list(model = model, pred = pred))
+}
+
+rlasso.rolling.window.Z <- function(Z, y, nprev, pl = FALSE) {
+  n <- length(y)
+  save.pred <- rep(NA, nprev)
+  
+  for (i in seq_len(nprev)) {
+    train_start <- i
+    train_end <- n - nprev + i - 1
+    
+    Z_train <- Z[train_start:train_end, ]
+    y_train <- y[train_start:train_end]
+    
+    Z_test <- Z[train_end + 1, , drop = FALSE]
+    
+    model <- rlasso(Z_train, y_train, post = pl)
+    save.pred[i] <- predict(model, newdata = Z_test)
+    
+    cat("Iteration", i, "done\n")
+  }
+  
+  real <- tail(y, nprev)
+  rmse <- sqrt(mean((real - save.pred)^2))
+  mae <- mean(abs(real - save.pred))
+  
+  return(list(pred = save.pred, errors = c(rmse = rmse, mae = mae)))
+}
 
 ```
 
