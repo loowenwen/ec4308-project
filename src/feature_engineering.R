@@ -8,15 +8,22 @@ library(purrr)
 #function to create lag variables
 create_lags <- function(df, p, dates) {
   stopifnot(nrow(df) == length(dates))
+  
   if (p == 0) return(tibble(sasdate = dates, df))
   
+  # Create lagged variables
   lagged <- lapply(1:p, function(l) lag(df, l))
   lagged_df <- do.call(cbind, lagged)
   colnames(lagged_df) <- paste0(rep(colnames(df), each = p), "_L", 1:p)
   
+  # Include the original variables
+  full_df <- cbind(df, lagged_df)
+  
   valid_rows <- (p + 1):nrow(df)
-  tibble(sasdate = dates[valid_rows],
-         as.data.frame(lagged_df[valid_rows, , drop = FALSE]))
+  tibble(
+    sasdate = dates[valid_rows],
+    as.data.frame(full_df[valid_rows, , drop = FALSE])
+  )
 }
 
 #align by common date
