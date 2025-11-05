@@ -17,7 +17,7 @@ if (file.exists(save_path)) {
 
 # Load and reorder Z matrices
 all_Z_list <- readRDS("all_Z_matrices.rds")
-Z_list <- all_Z_list
+Z_list <- all_Z_list[which(names(all_Z_list) == "Z_X_MAF"):length(all_Z_list)]
 y_t <- y_t
 nprev <- 66
 Z_order <- names(sort(sapply(Z_list, function(z) ncol(z))))
