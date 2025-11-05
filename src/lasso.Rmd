@@ -236,7 +236,7 @@ rmse_vec3
 
 ```{r lasso with rolling window}
 horizons <- c(1,3,6,12)
-save_path <- "rlasso_results_progress.rds"
+save_path <- "rlasso_results.rds"
 
 # Load previous progress if available
 if (file.exists(save_path)) {
