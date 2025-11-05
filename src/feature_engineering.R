@@ -8,15 +8,22 @@ library(purrr)
 #function to create lag variables
 create_lags <- function(df, p, dates) {
   stopifnot(nrow(df) == length(dates))
+  
   if (p == 0) return(tibble(sasdate = dates, df))
   
+  # Create lagged variables
   lagged <- lapply(1:p, function(l) lag(df, l))
   lagged_df <- do.call(cbind, lagged)
   colnames(lagged_df) <- paste0(rep(colnames(df), each = p), "_L", 1:p)
   
+  # Include the original variables
+  full_df <- cbind(df, lagged_df)
+  
   valid_rows <- (p + 1):nrow(df)
-  tibble(sasdate = dates[valid_rows],
-         as.data.frame(lagged_df[valid_rows, , drop = FALSE]))
+  tibble(
+    sasdate = dates[valid_rows],
+    as.data.frame(full_df[valid_rows, , drop = FALSE])
+  )
 }
 
 #align by common date
@@ -109,11 +116,11 @@ p_f <- 4  #Number of lags for factors
 p_m <- 4 #Number of lags for X
 
 X_t <- X_full %>% select(-sasdate) #from data_cleaning.r (use this)
-X_t_raw <- fred_clean %>% select(-CPIAUCSL) 
+X_t_raw_withdate <- fred_clean %>% select(-CPIAUCSL) 
 dates_Xt <- X_full$sasdate #when using stationary Xs
-dates_Xtraw <- X_t_raw$sasdate #when using non stationary Xs
+dates_Xtraw <- X_t_raw_withdate$sasdate #when using non stationary Xs
 dates_yt <- y_full$sasdate #when using yt
-X_t_raw <- fred_clean %>% select(-sasdate)  #use this
+X_t_raw <- X_t_raw_withdate %>% select(-sasdate)  #use this
 
 # ---- Lagged F (on stationary Xs) ------------------------------------------------------
 
@@ -171,14 +178,14 @@ Z_F_stationary <- align_by_date(F_lags_stationary, y_lags)
 Z_F_raw <- align_by_date(F_lags_raw, y_lags)
 
 #F-Level: Using factors + Levels
-Z_F_Level_stationary <- align_by_date(F_lags_stationary,y_t, y_lags)
-Z_F__Level_raw <- align_by_date(F_lags_raw, y_t, y_lags)
+Z_F_Level_stationary <- align_by_date(F_lags_stationary,y_t %>% select(-c(CPI_raw,CPI_t)), y_lags)
+Z_F_Level_raw <- align_by_date(F_lags_raw, y_t %>% select(-c(CPI_raw,CPI_t)), y_lags)
 
 #X: Using stationary lagged Xs only
 Z_X <- align_by_date(X_t_lags, y_lags)
 
 #Using raw Xs only (not in paper)
-Z_Ht <- align_by_date(X_t_raw, y_lags)
+Z_Ht <- align_by_date(X_t_raw_withdate, y_lags)
 
 #X-MARX: Using stationary lagged Xs + MARX
 Z_X_MARX <- align_by_date(X_t_lags, marx_data, y_lags)
@@ -205,6 +212,8 @@ saveRDS(
   list(
     Z_F_stationary = Z_F_stationary,
     Z_F_raw = Z_F_raw,
+    Z_F_Level_stationary = Z_F_Level_stationary,
+    Z_F_Level_raw = Z_F_Level_raw,
     Z_X = Z_X,
     Z_Ht = Z_Ht,
     Z_X_MARX = Z_X_MARX,

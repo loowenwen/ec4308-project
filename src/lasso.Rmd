@@ -26,30 +26,30 @@ MSE <- function(pred, truth){
   return(mean((truth - pred)^2)) 
 }
 
-#scale a df using min-max from training data
-minmax_scale <- function(df) {
-  mins <- apply(df, 2, min, na.rm = TRUE)
-  maxs <- apply(df, 2, max, na.rm = TRUE)
-  
-  scaled <- sweep(df, 2, mins, "-")
-  scaled <- sweep(scaled, 2, maxs - mins, "/")
-  
-  list(scaled = scaled, mins = mins, maxs = maxs)
-}
-
-# APPLY previously fitted min-max parameters to a new dataset
-minmax_apply <- function(df, mins, maxs) {
-  scaled <- sweep(df, 2, mins, "-")
-  scaled <- sweep(scaled, 2, maxs - mins, "/")
-  return(scaled)
-}
-
-#Inverse transform (to get back actual values)
-minmax_unscale <- function(scaled, mins, maxs) {
-  unscaled <- sweep(scaled, 2, maxs - mins, "*")
-  unscaled <- sweep(unscaled, 2, mins, "+")
-  return(unscaled)
-}
+# #scale a df using min-max from training data
+# minmax_scale <- function(df) {
+#   mins <- apply(df, 2, min, na.rm = TRUE)
+#   maxs <- apply(df, 2, max, na.rm = TRUE)
+#   
+#   scaled <- sweep(df, 2, mins, "-")
+#   scaled <- sweep(scaled, 2, maxs - mins, "/")
+#   
+#   list(scaled = scaled, mins = mins, maxs = maxs)
+# }
+# 
+# # APPLY previously fitted min-max parameters to a new dataset
+# minmax_apply <- function(df, mins, maxs) {
+#   scaled <- sweep(df, 2, mins, "-")
+#   scaled <- sweep(scaled, 2, maxs - mins, "/")
+#   return(scaled)
+# }
+# 
+# #Inverse transform (to get back actual values)
+# minmax_unscale <- function(scaled, mins, maxs) {
+#   unscaled <- sweep(scaled, 2, maxs - mins, "*")
+#   unscaled <- sweep(unscaled, 2, mins, "+")
+#   return(unscaled)
+# }
   
 ```
 
@@ -235,36 +235,46 @@ rmse_vec3
 ```
 
 ```{r lasso with rolling window}
+horizons <- c(1,3,6,12)
+save_path <- "rlasso_results.rds"
+
+# Load previous progress if available
+if (file.exists(save_path)) {
+  results <- readRDS(save_path)
+  cat("Loaded existing results from", save_path, "\n")
+} else {
+  results <- list()
+  cat("Starting new results list\n")
+}
+
 runrlasso_Z <- function(Z, y, pl = FALSE) {
-  # Combine predictors and dummy if needed
   df <- as.data.frame(Z)
-  
-  # Fit (post-)LASSO model
   model <- rlasso(df, y, post = pl)
-  
-  # Predict the next observation (last row of Z)
   pred <- predict(model, newdata = tail(df, 1))
-  
   return(list(model = model, pred = pred))
 }
 
 rlasso.rolling.window.Z <- function(Z, y, nprev, pl = FALSE) {
+  if (length(y) > nrow(Z)) {
+    y <- tail(y, nrow(Z))
+  } else if (length(y) < nrow(Z)) {
+    Z <- Z[(nrow(Z) - length(y) + 1):nrow(Z), , drop = FALSE]
+  }
+  
   n <- length(y)
   save.pred <- rep(NA, nprev)
   
   for (i in seq_len(nprev)) {
+    print(i)
     train_start <- i
     train_end <- n - nprev + i - 1
     
     Z_train <- Z[train_start:train_end, ]
     y_train <- y[train_start:train_end]
-    
     Z_test <- Z[train_end + 1, , drop = FALSE]
     
     model <- rlasso(Z_train, y_train, post = pl)
     save.pred[i] <- predict(model, newdata = Z_test)
-    
-    cat("Iteration", i, "done\n")
   }
   
   real <- tail(y, nprev)
@@ -274,35 +284,77 @@ rlasso.rolling.window.Z <- function(Z, y, nprev, pl = FALSE) {
   return(list(pred = save.pred, errors = c(rmse = rmse, mae = mae)))
 }
 
-Z_list = 
-nprev <- 60
-results <- list()
+# === MAIN LOOP ===
+all_Z_list <- readRDS("all_Z_matrices.rds")
+Z_list <- all_Z_list
+#Z_list = all_Z_list["Z_X"]
+y_t = y_t 
+nprev <- 66
 
 for (z_name in names(Z_list)) {
-  Z <- Z_list[[z_name]]
+  Z_full <- Z_list[[z_name]]
+  Z <- Z_full %>% select(-sasdate)
+  cat("\n=============================\n")
   cat("Running for:", z_name, "\n")
   
-  results[[z_name]] <- list()
+  if (is.null(results[[z_name]])) results[[z_name]] <- list()
+  
+  # Tail y to match Z
+  if (nrow(y_t) > nrow(Z)) {
+    y_aligned <- tail(y_t, nrow(Z))
+    cat("  Tailed y from", nrow(y_t), "to", nrow(y_aligned), "\n")
+  } else {
+    y_aligned <- y_t
+  }
+
+  # Print first 3 dates for diagnostics
+  cat("  First 3 Z dates:", paste(as.character(Z_full$sasdate[1:3]), collapse = ", "), "\n")
+  cat("  First 3 y dates:", paste(as.character(y_aligned$sasdate[1:3]), collapse = ", "), "\n")
   
   for (h in horizons) {
+    if (!is.null(results[[z_name]][[paste0("h", h)]])) {
+      cat("  Skipping horizon", h, "(already done)\n")
+      next
+    }
+    
     cat("  Horizon:", h, "\n")
-    
-    # Shift y for horizon h
-    y_h <- c(y[(h + 1):length(y)], rep(NA, h))
-    
-    # Run rolling window only where complete data is available
+    y_h <- dplyr::lead(y_aligned$CPI_t, h)  # numeric target for rolling window
     valid_idx <- 1:(length(y_h) - h)
     
-    out <- rlasso.rolling.window.Z(Z[valid_idx, ], y_h[valid_idx], nprev = nprev, pl = FALSE)
+    out <- tryCatch(
+      rlasso.rolling.window.Z(Z[valid_idx, ], y_h[valid_idx], nprev = nprev, pl = FALSE),
+      error = function(e) {
+        cat("  Error at", z_name, "h=", h, ":", conditionMessage(e), "\n")
+        return(NULL)
+      }
+    )
     
     results[[z_name]][[paste0("h", h)]] <- out
+    cat("    Horizon", h, "done.\n")
+    
+    # Save progress after each horizon
+    saveRDS(results, save_path)
+    cat("  Progress saved to", save_path, "\n")
   }
+
+  cat("*** Finished all horizons for", z_name, "***\n\n")
 }
 
-# Access example:
-# results[["Z1"]][["h3"]]$errors
-# results[["Z1"]][["h3"]]$pred
 
+# === Summary printout ===
+cat("\nSummary of results:\n")
+for (z_name in names(results)) {
+  cat("Results for:", z_name, "\n")
+  for (h in horizons) {
+    if (!is.null(results[[z_name]][[paste0("h", h)]])) {
+      error_vec <- results[[z_name]][[paste0("h", h)]]$errors
+      cat("  Horizon", h, ": RMSE =", round(error_vec["rmse"], 4), 
+          ", MAE =", round(error_vec["mae"], 4), "\n")
+    } else {
+      cat("  Horizon", h, ": not yet computed\n")
+    }
+  }
+}
 
 ```
 
