@@ -2,7 +2,7 @@
 ## RANDOM WALK MODEL ##
 
 y_train <- read.csv("../data/y_train.csv")
-y_train <- read.csv("../data/y_train.csv")
+y_test <- read.csv("../data/y_test.csv")
 
 all_Y <- rbind(y_train, y_test)
 #fred_normalized <- data.frame( scale(fred_data_clean[, 2:127]))
@@ -10,7 +10,7 @@ all_Y <- rbind(y_train, y_test)
  
 Y <- all_Y$CPI_t
 
-nprev=66 #number of out-of-sample observations (test window )
+nprev=100 #number of out-of-sample observations (test window )
 
 oosy=tail(Y,nprev) #get the out-of-sample true values
 
