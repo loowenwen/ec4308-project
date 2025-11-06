@@ -1,97 +1,245 @@
 library(dplyr)
 library(glmnet)
-library(purrr)
+library(doParallel)
+library(foreach)
+library(ggplot2)
 
----------------------------###USING F-X-MARX (F built using non stationary Xs)####------------------------------------------------
+# --- Read Data ---
 Z_objects <- readRDS("all_Z_matrices.rds")
-Za_train <- Z_objects$Z_Fraw_X_MARX_ %>% arrange(sasdate)
-Za_test  <- Z_objects$Z_Fraw_X_MARX_test %>% arrange(sasdate)
+Z_names <- names(Z_objects)
 
-#Set target: next-period CPI growth
-y_train_full <- lead(Za_train$CPI_t_L1)
-y_test_full  <- lead(Za_test$CPI_t_L1)
+# --- Order by matrix size (smallest → largest) ---
+Z_order <- names(sort(sapply(Z_objects[Z_names], ncol)))
+Z_names <- Z_order
 
-#Drop last row (lead creates NA)
-Za_train <- Za_train[-nrow(Za_train), ]
-Za_test  <- Za_test[-nrow(Za_test), ]
+# --- Load or initialize results ---
+ridge_results_path <- "ridge_forecasts_allZ_aligned_fixed.rds"
+lambda_results_path <- "ridge_lambda_allZ_aligned_fixed.rds"
 
-y_train_full <- y_train_full[-length(y_train_full)]
-y_test_full  <- y_test_full[-length(y_test_full)]
+all_ridge_results <- if (file.exists(ridge_results_path)) readRDS(ridge_results_path) else list()
+all_lambda_results <- if (file.exists(lambda_results_path)) readRDS(lambda_results_path) else list()
 
-#Build the design matrices
-feat_train <- Za_train %>% select(-sasdate, -starts_with("CPI_"))
-feat_test  <- Za_test  %>% select(-sasdate, -starts_with("CPI_"))
+processed_Z <- names(all_ridge_results)
+Z_to_process <- setdiff(Z_names, processed_Z)
 
-#Keep *only* columns that exist in BOTH sets
-common_cols <- intersect(colnames(feat_train), colnames(feat_test))
+cat("Already processed:", processed_Z, "\n")
+cat("To process (ordered smallest → largest):", Z_to_process, "\n")
 
-feat_train <- feat_train %>% select(all_of(common_cols))
-feat_test  <- feat_test  %>% select(all_of(common_cols))
+if (length(Z_to_process) == 0) stop("All Z matrices processed.")
 
-x_train_full <- as.matrix(feat_train)
-x_test_full  <- as.matrix(feat_test)
+# --- Helper metrics ---
+MSE <- function(pred, truth) mean((pred - truth)^2, na.rm = TRUE)
+RMSE <- function(pred, truth) sqrt(MSE(pred, truth))
+MAE <- function(pred, truth) mean(abs(pred - truth), na.rm = TRUE)
 
-#sanity check
-stopifnot(ncol(x_train_full) == ncol(x_test_full))
-cat("Number of predictors (common):", ncol(x_train_full), "\n")   # should be 1936
-
-
-MSE <- function(pred, truth) mean((truth - pred)^2, na.rm = TRUE)
-
-# -------------------------------------------------
-# Rolling-window Ridge with CV inside each window
-# -------------------------------------------------
-roll_ridge_cv <- function(x_full, y_full, test_x, test_y,
-                          window_size = 120,
-                          cv_folds = 10,
-                          seed = 1789424) {
-  
-  n_train <- nrow(x_full)
-  n_test  <- nrow(test_x)
-  pred_test <- numeric(n_test)
-  
-  for (t in seq_len(n_test)) {
-    # rolling window - expanding to the end of train
-    start_idx <- max(1, n_train - window_size + 1)
-    end_idx   <- n_train
-    
-    x_win <- x_full[start_idx:end_idx, , drop = FALSE]
-    y_win <- y_full[start_idx:end_idx]
-    
-    # CV to pick best lambda (only on window data) 
-    set.seed(seed)
-    cv_fit <- cv.glmnet(x_win, y_win,
-                        alpha = 0,          
-                        nfolds = cv_folds,
-                        standardize = TRUE) 
-    
-    best_lambda <- cv_fit$lambda.min
-    
-    #refit on whole window with best lambda 
-    ridge_fit <- glmnet(x_win, y_win,
-                        alpha = 0,
-                        lambda = best_lambda)
-    
-    # Predict *exactly* the t-th test observation
-    pred_test[t] <- predict(ridge_fit,
-                            newx = matrix(test_x[t, ], nrow = 1),
-                            s = best_lambda)[1, 1]
-  }
-  
-  list(predictions = pred_test,
-       mse = MSE(pred_test, test_y))
+# --- Clean matrix ---
+clean_Z_matrix <- function(Z_mat, target_col = "CPI_t") {
+  if (!target_col %in% colnames(Z_mat)) stop(paste("Missing target column:", target_col))
+  Z_mat <- Z_mat[!is.na(Z_mat[[target_col]]), ]
+  pred_cols <- setdiff(colnames(Z_mat), c("sasdate", target_col))
+  Z_mat <- Z_mat[!apply(Z_mat[, pred_cols], 1, function(x) any(is.na(x))), ]
+  Z_mat <- Z_mat[, !duplicated(colnames(Z_mat))]
+  rownames(Z_mat) <- NULL
+  return(Z_mat)
 }
 
-# -------------------------------------------------
-# 4. Run the rolling forecast
-# -------------------------------------------------
-set.seed(1789424)
-result <- roll_ridge_cv(x_full = x_train_full,
-                        y_full = y_train_full,
-                        test_x = x_test_full,
-                        test_y = y_test_full,
-                        window_size = 120,      # 10 years of monthly data
-                        cv_folds = 10)
+# --- Time-series CV for λ (leakage-safe) ---
+time_series_lambda_cv <- function(X, y, h = 1, n_oos = 66, window_size = 120, lambda_grid) {
+  y_h <- dplyr::lead(y, h)
+  valid_idx <- !is.na(y_h)
+  X <- as.matrix(X[valid_idx, ])
+  y <- y_h[valid_idx]
+  
+  n_total <- nrow(X)
+  n_insample <- n_total - n_oos
+  
+  X_in <- X[1:n_insample, ]
+  y_in <- y[1:n_insample]
+  
+  origins <- seq(window_size, n_insample - 1)
+  
+  mse_per_lambda <- foreach(lam = lambda_grid, .combine = c, .packages = "glmnet") %dopar% {
+    fold_errors <- numeric(length(origins))
+    for (k in seq_along(origins)) {
+      end <- origins[k]
+      start <- end - window_size + 1
+      X_train <- X_in[start:end, ]
+      y_train <- y_in[start:end]
+      X_val <- matrix(X_in[end + 1, ], nrow = 1)
+      y_val <- y_in[end + 1]
+      
+      fit <- glmnet(X_train, y_train, alpha = 0, lambda = lam, standardize = TRUE)
+      pred <- as.numeric(predict(fit, newx = X_val, s = lam))
+      fold_errors[k] <- (pred - y_val)^2
+    }
+    mean(fold_errors, na.rm = TRUE)
+  }
+  
+  idx_min <- which.min(mse_per_lambda)
+  lambda_min <- lambda_grid[idx_min]
+  lambda_1se <- lambda_min
+  list(lambda_min = lambda_min, lambda_1se = lambda_1se)
+}
 
-cat("Rolling-window Ridge MSE on test set:", result$mse, "\n")
-head(result$predictions)
+# --- Rolling Ridge Forecast (aligned & interpretable) ---
+ridge_rolling_h <- function(X, y, h, nprev, window_size, lambda, lambda_grid = NULL, ret_errors = TRUE) {
+  y_h <- dplyr::lead(y, h)
+  valid_idx <- !is.na(y_h)
+  X <- as.matrix(X[valid_idx, ])
+  y <- y_h[valid_idx]
+  n <- nrow(X)
+  
+  preds <- rep(NA, nprev)
+  actuals <- rep(NA, nprev)
+  
+  for (i in seq_len(nprev)) {
+    end <- n - nprev + i - 1
+    start <- max(1, end - window_size + 1)
+    X_train <- X[start:end, ]
+    y_train <- y[start:end]
+    X_test <- matrix(X[end + 1, ], nrow = 1)
+    y_true <- y[end + 1]
+    
+  
+    if (!is.null(lambda_grid)) {
+      cv_res <- time_series_lambda_cv(X_train, y_train, h = 1, n_oos = 10, window_size = min(window_size, nrow(X_train) - 10), lambda_grid)
+       lambda <- cv_res$lambda_min
+     }
+    
+    fit <- glmnet(X_train, y_train, alpha = 0, lambda = lambda, standardize = TRUE)
+    preds[i] <- as.numeric(predict(fit, newx = X_test, s = lambda))
+    actuals[i] <- y_true
+  }
+  
+  out <- list(
+    preds = preds,
+    real = actuals,
+    rmse = RMSE(preds, actuals),
+    mae = MAE(preds, actuals)
+  )
+  
+  if (ret_errors) out$errors <- preds - actuals
+  return(out)
+}
+
+# --- Parallel setup ---
+n_cores <- max(1, parallel::detectCores() - 2)
+cl <- makeCluster(n_cores)
+registerDoParallel(cl)
+cat("Running on", n_cores, "cores\n")
+
+# --- Parameters ---
+horizons <- c(1, 3, 6, 12)
+n_oos <- 66
+window_size <- 120
+lambda_grid <- 10^seq(2, -3, length.out = 30)
+
+# --- Main loop ---
+for (z_name in Z_to_process) {
+  cat("\n=== Ridge Forecast for", z_name, "===\n")
+  
+  tryCatch({
+    Z_mat <- Z_objects[[z_name]] %>% arrange(sasdate)
+    Z_mat <- clean_Z_matrix(Z_mat, "CPI_t")
+    
+    y_full <- Z_mat$CPI_t
+    X_full <- Z_mat %>% select(-sasdate, -CPI_t)
+    X_full <- model.matrix(~ ., data = X_full)[, -1]
+    
+    ridge_out <- list()
+    lambda_out <- list()
+    
+    for (h in horizons) {
+      cat("  Horizon:", h, "\n")
+      
+      # λ cross-validation (no leakage)
+      cv_res <- time_series_lambda_cv(X_full, y_full, h, n_oos, window_size, lambda_grid)
+      best_lambda <- cv_res$lambda_1se
+      cat("    λ chosen:", signif(best_lambda, 3), "\n")
+      lambda_out[[paste0("h", h)]] <- cv_res
+      
+      # Rolling forecast
+      res <- ridge_rolling_h(X_full, y_full, h, nprev = n_oos, window_size = window_size, lambda = best_lambda)
+      ridge_out[[paste0("h", h)]] <- res
+    }
+    
+    all_ridge_results[[z_name]] <- ridge_out
+    all_lambda_results[[z_name]] <- lambda_out
+    
+    saveRDS(all_ridge_results, ridge_results_path)
+    saveRDS(all_lambda_results, lambda_results_path)
+    cat("Saved results for:", z_name, "\n")
+    
+  }, error = function(e) {
+    cat("Error:", e$message, "\n")
+  })
+}
+
+stopCluster(cl)
+cat("\n✅ All Ridge forecasts completed (ordered smallest → largest Z matrices).\n")
+
+# --- Reload results for plotting ---
+ridge_results <- readRDS(ridge_results_path)
+Z_objects <- readRDS("all_Z_matrices.rds")
+
+# --- Plotting ---
+out_dir <- "ridge_plots_clean_fixed"
+if (!dir.exists(out_dir)) dir.create(out_dir)
+horizons <- c("h1", "h3", "h6", "h12")
+
+theme_white <- theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(size = 11, color = "gray30"),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 11),
+    legend.position = "top",
+    legend.title = element_blank(),
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(color = "gray90", linewidth = 0.3)
+  )
+
+for (z_name in names(ridge_results)) {
+  cat("Plotting for:", z_name, "\n")
+  
+  ridge_out <- ridge_results[[z_name]]
+  Z_mat <- Z_objects[[z_name]] %>% arrange(sasdate)
+  
+  for (h in horizons) {
+    if (!h %in% names(ridge_out)) next
+    
+    preds <- ridge_out[[h]]$preds
+    real <- ridge_out[[h]]$real
+    nprev <- length(preds)
+    sasdates <- tail(Z_mat$sasdate, nprev)
+    
+    df_plot <- data.frame(
+      Date = sasdates,
+      Actual = real,
+      Predicted = preds
+    )
+    
+    rmse_val <- round(ridge_out[[h]]$rmse, 4)
+    mae_val  <- round(ridge_out[[h]]$mae, 4)
+    
+    p <- ggplot(df_plot, aes(x = Date)) +
+      geom_line(aes(y = Actual, color = "Actual"), linewidth = 0.9) +
+      geom_line(aes(y = Predicted, color = "Predicted"), linetype = "dashed", linewidth = 0.9) +
+      scale_color_manual(values = c("Actual" = "#1A1A1A", "Predicted" = "#E63946")) +
+      labs(
+        title = paste("Actual vs Predicted —", z_name),
+        subtitle = paste("H =", gsub("h", "", h), "| RMSE =", rmse_val, "| MAE =", mae_val),
+        y = "CPI_t",
+        x = "Date"
+      ) +
+      theme_white
+    
+    file_name <- file.path(out_dir, paste0(z_name, "_", h, "_plot.png"))
+    ggsave(file_name, plot = p, width = 7, height = 4, dpi = 300)
+  }
+}
+
+cat("\n✅ Clean plots with aligned forecasts saved to 'ridge_plots_clean_fixed' folder.\n")
