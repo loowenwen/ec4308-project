@@ -1,135 +1,199 @@
+# load libraries
+library(readr)
+library(dplyr)
 library(tidyverse)
-library(lubridate)
-library(timetk)
 library(randomForest)
-library(caret)
-library(scales)
+
+# set seed for reproducibility
 set.seed(4308)
 
-# ----------------------------------------------------------
-# 1. Load and inspect raw FRED-MD data
-# ----------------------------------------------------------
-# The FRED-MD monthly dataset usually has the first column as dates
-# and remaining columns as macro variables.
-# CPIAUCSL = Consumer Price Index (All Urban Consumers)
-# ----------------------------------------------------------
-fred_raw <- read_csv("../data/2025-09-MD.csv")
+# --------- BENCHMARK USING TRANSFORMED PREDICTORS ---------
 
-glimpse(fred_raw[1:10])  # quick peek
+# load the X values
+predictors_transformed <- read_csv("../data/predictors_transformed.csv")
+X <- predictors_transformed
 
-# convert date column (usually named 'sasdate' or 'date')
-if ("sasdate" %in% names(fred_raw)) {
-  fred_raw <- fred_raw %>% rename(date = sasdate)
+# load the y values
+cpi_target_full <- read_csv("../data/cpi_target_full.csv")
+y <- cpi_target_full[, -2]  # assuming column 2 is dropped
+
+runrf <- function(X, y, lag = 1) {
+  # combine both X and y using left join on sasdate
+  full_data <- X %>% left_join(y, by = "sasdate") %>% drop_na()
+  
+  # drop date column and convert to numeric matrix
+  data_mat <- as.matrix(full_data[, -1])
+  
+  # create 4 lags + forecast horizon shift (=lag)
+  temp <- embed(data_mat, 4 + lag)
+  
+  # define number of predictors (including target)
+  nvar <- ncol(data_mat)
+  
+  # y variable (inflation rate target = last column before embedding)
+  y_aligned <- temp[, nvar]
+  
+  # lagged predictors (drop future columns)
+  X_lagged <- temp[, -c(1:(nvar * lag))]
+  
+  # fit the random forest on default settings
+  model <- randomForest(X_lagged, y_aligned, importance = TRUE)
+  
+  # generate forecast (using the last available observation)
+  if (nrow(X_lagged) > 0) {
+    pred <- tail(predict(model, X_lagged), 1)
+  } else {
+    pred <- NA
+  }
+  
+  # return the estimated model and h-step forecast
+  return(list("model" = model, "pred" = pred))
 }
-# remove first row
-fred_raw <- fred_raw[-1,]
-fred_raw$date <- as.Date(fred_raw$date, format = "%m/%d/%Y")
 
-# ----------------------------------------------------------
-# 2. Construct target variable: Monthly CPI inflation (% change)
-# ----------------------------------------------------------
-# CPIAUCSL is usually in levels, so we take log-difference * 1200
-# (to get annualized monthly %)
-# ----------------------------------------------------------
-fred_raw <- fred_raw %>%
-  mutate(inflation = 1200 * (log(CPIAUCSL) - lag(log(CPIAUCSL)))) %>%
-  drop_na(inflation)
+rf_rolling_window <- function(X, y, nprev, lag = 1) {
+  # combine into one full dataset
+  full_data <- X %>% 
+    left_join(y, by = "sasdate") %>% 
+    drop_na()
+  
+  # storage for outputs
+  save_importance <- vector("list", nprev)
+  save_pred <- matrix(NA, nprev, 1)
+  
+  # rolling window loop
+  for (i in nprev:1) {
+    # define the rolling estimation window
+    Y_window <- full_data[(1 + nprev - i):(nrow(full_data) - i), ]
+    
+    # call the RF forecasting function
+    rf_result <- runrf(
+      X = Y_window[, -ncol(Y_window)],  # all columns except target
+      y = Y_window[, c("sasdate", names(Y_window)[ncol(Y_window)])],  # sasdate + target
+      lag = lag
+    )
+    
+    # store predictions and variable importance
+    save_pred[(1 + nprev - i), ] <- rf_result$pred
+    save_importance[[i]] <- importance(rf_result$model)
+    
+    cat("Iteration", (1 + nprev - i), "completed. \n")
+  }
+  
+  # evaluation data
+  real <- full_data[[ncol(full_data)]]
+  time_axis <- full_data$sasdate
+  pred_padded <- c(rep(NA, length(real) - nprev), save_pred)
+  
+  # compute forecast errors
+  rmse <- sqrt(mean((tail(real, nprev) - save_pred)^2))
+  mae <- mean(abs(tail(real, nprev) - save_pred))
+  errors <- c("rmse" = rmse, "mae" = mae)
+  
+  # return everything cleanly
+  return(list(
+    pred = data.frame(sasdate = time_axis,
+                      actual = real,
+                      forecast = pred_padded),
+    errors = errors,
+    save_importance = save_importance
+  ))
+}
 
-# ----------------------------------------------------------
-# 3. Clean predictors
-# ----------------------------------------------------------
-# Remove CPIAUCSL (used to create inflation)
-# Remove any non-numeric or constant columns
-# ----------------------------------------------------------
-fred_clean <- fred_raw %>%
-  select(date, inflation, where(is.numeric)) %>%
-  select(-CPIAUCSL) %>%
-  mutate(across(-c(date, inflation), scale)) %>%
-  drop_na()
+# plotting function
+plot_rf_forecast <- function(rf_results, lag_val) {
+  # extract variables
+  time_axis <- as.Date(rf_results$pred$sasdate)
+  real <- rf_results$pred$actual
+  pred_padded <- rf_results$pred$forecast
+  rmse_val <- round(rf_results$errors["rmse"], 4)
+  mae_val  <- round(rf_results$errors["mae"], 4)
+  
+  # titles
+  main_title <- sprintf("RF Rolling Forecasts (Lag = %d Months)", lag_val)
+  sub_title  <- sprintf("RMSE = %.4f | MAE = %.4f", rmse_val, mae_val)
+  
+  # base R plot
+  plot(time_axis, real, type = "l",
+       main = main_title, sub = sub_title,
+       ylab = "Inflation", xlab = "Time",
+       col = "black", lwd = 1.2, xaxt = "n")
+  
+  # add forecast line
+  lines(time_axis, pred_padded, col = "red", lwd = 1.2)
+  
+  # add custom date axis
+  axis.Date(side = 1, at = seq(min(time_axis), max(time_axis), by = "1 year"),
+            format = "%Y")
+  
+  # legend and grid
+  legend("topleft", legend = c("Actual", "Forecast"),
+         col = c("black", "red"), lty = 1, bty = "n", horiz = TRUE)
+  grid(col = "gray80")
+}
 
-# ----------------------------------------------------------
-# 4. Feature engineering: add inflation lags (1:12 months)
-# ----------------------------------------------------------
-fred_lagged <- fred_clean %>%
-  tk_augment_lags(.value = inflation, .lags = 1:12) %>%
-  drop_na()
 
-# ----------------------------------------------------------
-# 5. Train-test split (train: pre-2020, test: 2020+)
-# ----------------------------------------------------------
-train <- fred_lagged %>% filter(date < "2020-01-01")
-test  <- fred_lagged %>% filter(date >= "2020-01-01")
-
-X_train <- train %>% select(-c(date, inflation))
-y_train <- train$inflation
-X_test  <- test %>% select(-c(date, inflation))
-y_test  <- test$inflation
-
-cat("Training sample:", nrow(train), "obs\n")
-cat("Testing sample:", nrow(test), "obs\n")
-
-# ----------------------------------------------------------
-# 6. Train Random Forest
-# ----------------------------------------------------------
-rf_model <- randomForest(
-  x = X_train,
-  y = y_train,
-  ntree = 500,
-  mtry = floor(sqrt(ncol(X_train))),
-  importance = TRUE
+# run the random forest with rolling window
+rf_results <- rf_rolling_window(
+  X = predictors_transformed,
+  y = cpi_target_full %>% select(sasdate, CPI_t),
+  nprev = 66,  # 66 out-of-sample forecasts (starting from 2020 Jan)
+  lag = 1      # 1-month ahead
 )
 
-print(rf_model)
+# plot graph
+plot_rf_forecast(rf_results, 1)
 
-# ----------------------------------------------------------
-# 7. Forecast & evaluate
-# ----------------------------------------------------------
-pred_rf <- predict(rf_model, X_test)
+# view results
+print(rf_results$errors)
 
-results <- tibble(
-  date = test$date,
-  actual = y_test,
-  forecast = pred_rf,
-  error = forecast - actual
-)
 
-rmse_rf <- sqrt(mean(results$error^2))
-mae_rf  <- mean(abs(results$error))
-direction_acc <- mean(sign(results$forecast) == sign(results$actual))
+# --------- SAVE RESULTS ---------
+saveRDS(rf_results, file = "../data/rf_results/predictors_transformed_lag1.rds")
 
-cat("\nRandom Forest performance:")
-cat("\nRMSE:", round(rmse_rf, 4))
-cat("\nMAE :", round(mae_rf, 4))
-cat("\nDirectional Accuracy:", round(direction_acc, 3), "\n")
 
-# ----------------------------------------------------------
-# 8. Visualization
-# ----------------------------------------------------------
-results %>%
-  ggplot(aes(x = date)) +
-  geom_line(aes(y = actual, colour = "Actual Inflation"), linewidth = 0.9) +
-  geom_line(aes(y = forecast, colour = "RF Forecast"), linewidth = 0.9, linetype = "dashed") +
-  geom_vline(xintercept = as.Date("2020-01-01"), linetype = "dotted", color = "black") +
-  annotate("text", x = as.Date("2020-06-01"), y = max(results$actual, na.rm=TRUE)*0.9,
-           label = "COVID-19 period", size = 3.5, color = "gray30") +
-  scale_colour_manual(values = c("Actual Inflation"="black","RF Forecast"="firebrick")) +
-  labs(title = "Random Forest Forecast vs Actual Inflation",
-       subtitle = "Training: 1980–2019 | Testing: 2020–2024",
-       y = "Inflation (annualized, %)", x = "", colour = "") +
-  theme_minimal(base_size = 13)
+# --------- LOOP THROUGH FOR THE DIFFERENT LAGS ---------
+# run the random forest with rolling window across the different forecast horizons
+for (lag_val in c(1, 3, 6, 12)) {
+  cat("Starting Random Forest Rolling Forecast for Lag =", lag_val, "\n")
+  cat("🕒 Start Time:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
+  
+  # run rolling window random forest
+  rf_results <- rf_rolling_window(
+    X = predictors_transformed,
+    y = cpi_target_full %>% select(sasdate, CPI_t),
+    nprev = 66,    # 66 out-of-sample forecasts (starting from 2020 Jan)
+    lag = lag_val  # forecast horizon
+    )
+  
+  cat("Model Completed for Lag =", lag_val, "\n")
+  
+  # save the full rf_results object
+  result_filename <- sprintf("../data/rf_results/predictors_transformed_lag%d.rds", lag_val)
+  saveRDS(rf_results, file = result_filename)
+  
+  # save plot
+  png_filename <- sprintf("../figures/rf_results/predictors_transformed_lag%d_plot.png", lag_val)
+  png(png_filename, width = 800, height = 500)
+  plot_rf_forecast(rf_results, lag_val)
+  dev.off()
+  
+  # print key metrics
+  if (!is.null(rf_results$errors)) {
+    print(rf_results$errors)
+  }
 
-# ----------------------------------------------------------
-# 9. Variable importance
-# ----------------------------------------------------------
-importance_df <- as.data.frame(importance(rf_model)) %>%
-  rownames_to_column("Variable") %>%
-  arrange(desc(IncNodePurity)) %>%
-  slice(1:15)
+  cat("Saved Results to:", result_filename, "\n")
+  
+  cat("Finished Lag =", lag_val, "\n")
+  cat("End Time:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
+}
+  
+  
 
-ggplot(importance_df, aes(x = reorder(Variable, IncNodePurity),
-                          y = IncNodePurity)) +
-  geom_col(fill = "steelblue") +
-  coord_flip() +
-  labs(title = "Top 15 Important Predictors (Random Forest)",
-       x = "", y = "Increase in Node Purity") +
-  theme_minimal()
+
+
+
+# unpack all the Z matrices from feature engineering
+Z_objects <- readRDS("all_Z_matrices.rds")
+list2env(Z_objects, envir = .GlobalEnv)
+Z_matrices <- names(Z_objects)
