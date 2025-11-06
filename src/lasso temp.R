@@ -2,7 +2,6 @@ library(hdm)
 library(dplyr)
 library(foreach)
 library(doParallel)
-library(progressr)
 
 horizons <- c(1,3,6,12)
 save_path <- "rlasso_bic_results.rds"
@@ -16,28 +15,24 @@ if (file.exists(save_path)) {
   cat("Starting new results list\n")
 }
 
-# === Load and reorder Z matrices ===
+# Load and reorder Z matrices
 all_Z_list <- readRDS("all_Z_matrices.rds")
 Z_list <- all_Z_list
-y_t <- y_t #y_t from cleaning script, 3 cols
+y_t <- y_t
 nprev <- 66
-
-# Reorder Z_list by increasing number of columns (excluding sasdate)
 Z_order <- names(sort(sapply(Z_list, function(z) ncol(z))))
 Z_list <- Z_list[Z_order]
 
-# --- Lambda grid (small) ---
+# Small lambda grid for BIC
 lambda_grid <- c(0.01, 0.1, 1)
 
-# --- Detect and register cores ---
-n_cores <- parallel::detectCores() - 3 #runs the horizons in parallel
+# Parallel setup
+n_cores <- parallel::detectCores() - 3
 cl <- makeCluster(n_cores)
 registerDoParallel(cl)
-cat("Using", n_cores, "cores for parallel execution\n")
+cat("Using", n_cores, "cores\n")
 
-# --- Main loop with progress ---
-handlers(global = TRUE)
-
+# Main loop
 for (z_name in names(Z_list)) {
   Z_full <- Z_list[[z_name]]
   Z <- Z_full %>% select(-sasdate)
@@ -46,7 +41,6 @@ for (z_name in names(Z_list)) {
   
   if (is.null(results[[z_name]])) results[[z_name]] <- list()
   
-  # Tail y to match Z
   y_aligned <- tail(y_t, nrow(Z))
   
   # Print first 3 dates for diagnostics
@@ -63,14 +57,13 @@ for (z_name in names(Z_list)) {
     y_h <- dplyr::lead(y_aligned$CPI_t, h)
     valid_idx <- 1:(length(y_h) - h)
     
-    # --- Parallel rolling window with progress ---
-    prog <- progressor(steps = nprev)
+    # Parallel rolling window
     out <- foreach(i = seq_len(nprev), .combine = 'c', .packages = c("hdm")) %dopar% {
       train_start <- i
       train_end <- length(y_h[valid_idx]) - nprev + i - 1
-      Z_train <- Z[valid_idx, ][train_start:train_end, ]
-      y_train <- y_h[valid_idx][train_start:train_end]
-      Z_test <- Z[valid_idx, ][train_end + 1, , drop = FALSE]
+      Z_train <- Z[train_start:train_end, ]
+      y_train <- y_h[train_start:train_end]
+      Z_test <- Z[train_end + 1, , drop = FALSE]
       
       # BIC selection
       bic_vals <- sapply(lambda_grid, function(lambda) {
@@ -82,14 +75,11 @@ for (z_name in names(Z_list)) {
       })
       best_lambda <- lambda_grid[which.min(bic_vals)]
       model <- rlasso(Z_train, y_train, post = FALSE, lambda = best_lambda)
-      pred <- predict(model, newdata = Z_test)
-      
-      prog()
-      pred
+      predict(model, newdata = Z_test)
     }
     
     results[[z_name]][[paste0("h", h)]] <- list(
-      pred = out, 
+      pred = out,
       errors = c(
         rmse = sqrt(mean((tail(y_h[valid_idx], nprev) - out)^2)),
         mae  = mean(abs(tail(y_h[valid_idx], nprev) - out))
@@ -106,7 +96,7 @@ for (z_name in names(Z_list)) {
 
 stopCluster(cl)
 
-# --- Summary ---
+# Summary
 cat("\nSummary of results:\n")
 for (z_name in names(results)) {
   cat("Results for:", z_name, "\n")
@@ -117,3 +107,6 @@ for (z_name in names(results)) {
     }
   }
 }
+
+
+# plot
