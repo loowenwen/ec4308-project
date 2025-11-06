@@ -94,7 +94,7 @@ best_hq <- results$p[which.min(results$HQ)]
 best_rmse <- results$p[which.min(results$RMSE)]
 
 cat(
-  "Observations used:", length(y), "\n",
+  "Observations used:", length(y_ts), "\n",
   "Forecast horizon (nprev):", nprev, "\n\n"
 )
 
@@ -289,7 +289,7 @@ results_list <- list()
 # loop through each horizon
 for (h in forecast_horizons) {
   # list all .rds files for this horizon
-  files <- list.files("../data/ar_results", 
+  files <- list.files("../data/ar(p)_results", 
                       pattern = paste0("horizon_", h, "_ar"), 
                       full.names = TRUE)
   
