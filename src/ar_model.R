@@ -25,7 +25,6 @@ rmse <- function(pred, truth) {
   sqrt(mean((truth - pred)^2))
 }
 
-
 # --------- AR(P) MODEL WITH FIXED TRAIN/TEST SPLIT ---------
 # create lagged features
 max_lag <- 12
@@ -145,7 +144,6 @@ ggplot(results, aes(x = p, y = BIC)) +
   labs(title = "BIC across AR(p) models", x = "Lag order (p)", y = "BIC") +
   theme_minimal()
 
-
 # --------- AR(P) MODEL WITH ROLLING WINDOW ---------
 # set seed for reproducibility
 set.seed(4308)
@@ -226,14 +224,13 @@ ar_roll <- ar_rolling_window(y = y_ts, nprev = nprev, p = p)
 
 cat("Rolling-Window RMSE:", ar_roll$rmse, "\n")
 
-# plot actual vs forecast
-
 # combine forecasts and actuals into one dataframe
 plot_df <- data.frame(
   Index = seq_along(ar_roll$actuals),
   Actual = ar_roll$actuals,
   Forecast = ar_roll$preds
 )
+
 # convert to long format for ggplot
 plot_df_long <- plot_df %>%
   tidyr::pivot_longer(cols = c("Actual", "Forecast"),
@@ -258,7 +255,7 @@ ggplot(plot_df_long, aes(x = Index, y = Value, color = Type)) +
   )
 
 
-# --------- RUN AR(P) ACROSS FORECAST HORIZONS ---------
+# --------- LOOP ACROSS FORECASTS HORIZONS ---------
 # set parameters
 nprev <- 66
 forecast_horizons <- c(1, 3, 6, 12)
@@ -284,7 +281,7 @@ for (h in forecast_horizons) {
 }
 
 
-# --------- AGGREGATE RESULTS BY HORIZONS ---------
+# --------- AGGREGATE RESULTS ---------
 # define horizons and storage list
 forecast_horizons <- c(1, 3, 6, 12)
 results_list <- list()
@@ -324,25 +321,15 @@ for (h in forecast_horizons) {
   results_list[[paste0("H", h)]] <- horizon_df
 }
 
-# save the results
-saveRDS(results_list, file = "../data/ar(p)_results/summary_results_list.rds")
-
-# Access horizon 3 results again
-results_list$H3
-
-# access Horizon 1 table
 results_list$H1
-
-# access Horizon 3 table
 results_list$H3
-
-# access Horizon 6 table
 results_list$H6
-
-# access Horizon 12 table
 results_list$H12
 
-# find the best ar(p) model for each forecast horizon
+# save the entire results list
+saveRDS(results_list, file = "../data/ar(p)_results/summary_results_list.rds")
+
+# find best ar(p) model across the different forecast horizonz
 summary_best <- data.frame()
 
 for (h in c(1, 3, 6, 12)) {
@@ -362,5 +349,5 @@ for (h in c(1, 3, 6, 12)) {
 
 summary_best
 
-# save the results
+# save results
 saveRDS(summary_best, file = "../data/ar(p)_results/summary_best_model.rds")

@@ -514,21 +514,29 @@ for (z_name in names(Z_list)) {
     valid_idx <- 1:(length(y_h) - h)
 
     # === Parallel rolling window ===
-    out <- foreach(i = seq_len(nprev), .packages = c("hdm")) %dopar% {
-      tryCatch({
-        rlasso.rolling.window.Z(
-          Z[valid_idx, ],
-          y_h[valid_idx],
-          nprev = 1,   # one-step rolling within each iteration
-          pl = TRUE    # plug-in lambda mode
-        )
-      }, error = function(e) {
-        return(list(error = conditionMessage(e)))
-      })
+    preds <- foreach(i = seq_len(nprev), .combine = c, .packages = c("hdm")) %dopar% {
+      train_start <- i
+      train_end <- length(y_h[valid_idx]) - nprev + i - 1
+      Z_train <- Z[train_start:train_end, ]
+      y_train <- y_h[train_start:train_end]
+      Z_test  <- Z[train_end + 1, , drop = FALSE]
+
+      # plug-in lambda fit
+      model <- rlasso(Z_train, y_train, post = TRUE)
+      predict(model, newdata = Z_test)
     }
 
-    results[[z_name]][[paste0("h", h)]] <- out
-    cat("    Horizon", h, "done.\n")
+    # === Compute RMSE/MAE per horizon ===
+    real <- tail(y_h[valid_idx], nprev)
+    rmse <- sqrt(mean((real - preds)^2))
+    mae  <- mean(abs(real - preds)))
+
+    results[[z_name]][[paste0("h", h)]] <- list(
+      pred = preds,
+      errors = c(rmse = rmse, mae = mae)
+    )
+
+    cat("    Horizon", h, "done. RMSE:", round(rmse, 4), "MAE:", round(mae, 4), "\n")
     saveRDS(results, save_path)
     cat("  Progress saved to", save_path, "\n")
   }
