@@ -3,9 +3,7 @@ library(glmnet)
 library(doParallel)
 library(foreach)
 
-## --------------------------------------------------------------
-## 1. Load static features (your pre-processed data)
-## --------------------------------------------------------------
+
 static_features <- readRDS("base_features_static.rds")
 X_t         <- static_features$X_t          # transformed (stationary)
 X_t_raw     <- static_features$X_t_raw      # raw levels
