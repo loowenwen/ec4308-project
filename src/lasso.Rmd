@@ -312,9 +312,9 @@ for (z_name in names(Z_list)) {
   Z <- Z_full %>% select(-sasdate)
   cat("\n=============================\n")
   cat("Running for:", z_name, "\n")
-  
+
   if (is.null(results[[z_name]])) results[[z_name]] <- list()
-  
+
   # Tail y to match Z
   if (nrow(y_t) > nrow(Z)) {
     y_aligned <- tail(y_t, nrow(Z))
@@ -326,33 +326,35 @@ for (z_name in names(Z_list)) {
   cat("  First 3 Z dates:", paste(as.character(Z_full$sasdate[1:3]), collapse = ", "), "\n")
   cat("  First 3 y dates:", paste(as.character(y_aligned$sasdate[1:3]), collapse = ", "), "\n")
 
-  # === Parallelized horizon loop ===
+  # === Horizon loop ===
   for (h in horizons) {
-    cat("  Horizon:", h, "\n")
-    
-    y_h <- dplyr::lead(y_aligned$CPI_t, h)
-    valid_idx <- 1:(length(y_h) - h)
-    
-    out <- foreach(i = 1:nprev, .packages = c("hdm")) %dopar% {
-      # parallel work inside horizon
-    }
-    
-    results[[z_name]][[paste0("h", h)]] <- out
-  }
-  
-  # === Collect and save results ===
-  for (res in horizon_outputs) {
-    h <- res$h
-    if (!is.null(res$skip) && res$skip) {
+    if (!is.null(results[[z_name]][[paste0("h", h)]])) {
       cat("  Skipping horizon", h, "(already done)\n")
       next
-    } else if (!is.null(res$out$error)) {
-      cat("  Error at", z_name, "h=", h, ":", res$out$error, "\n")
-      next
     }
-    results[[z_name]][[paste0("h", h)]] <- res$out
+
+    cat("  Horizon:", h, "\n")
+    y_h <- dplyr::lead(y_aligned$CPI_t, h)
+    valid_idx <- 1:(length(y_h) - h)
+
+    # === Parallel rolling window ===
+    out <- foreach(i = seq_len(nprev), .packages = c("hdm")) %dopar% {
+      tryCatch({
+        rlasso.rolling.window.Z(
+          Z[valid_idx, ],
+          y_h[valid_idx],
+          nprev = 1,   # one-step rolling within each iteration
+          pl = TRUE    # plug-in lambda mode
+        )
+      }, error = function(e) {
+        return(list(error = conditionMessage(e)))
+      })
+    }
+
+    results[[z_name]][[paste0("h", h)]] <- out
     cat("    Horizon", h, "done.\n")
     saveRDS(results, save_path)
+    cat("  Progress saved to", save_path, "\n")
   }
 
   cat("*** Finished all horizons for", z_name, "***\n\n")
@@ -375,6 +377,191 @@ for (z_name in names(results)) {
     }
   }
 }
+
+ 
+# #reset some results
+# for (z in c("Z_F_raw", "Z_X_MARX", "Z_Fstationary_X_MARX_", "Z_Fraw_X_MARX_", "Z_F_Level_raw", "Z_F_Level_stationary")) {
+#   results[[z]] = NULL
+# }
+
+```
+```{r comparison}
+
+lasso_results <- readRDS("rlasso_results.rds")
+
+# collect RMSEs for each horizon
+mse_summary <- do.call(rbind, lapply(names(lasso_results), function(z_name) {
+  res_list <- lasso_results[[z_name]]
+  do.call(rbind, lapply(names(res_list), function(h) {
+    rmse_val <- res_list[[h]]$rmse
+    data.frame(
+      Z_name = z_name,
+      Horizon = h,
+      RMSE = rmse_val,
+      MSE = rmse_val^2
+    )
+  }))
+})) %>%
+  as.data.frame()
+
+# ranked each horizon (1 is smallest MSE)
+mse_ranked <- mse_summary %>%
+  group_by(Horizon) %>%
+  mutate(Rank = rank(MSE, ties.method = "first")) %>%
+  arrange(Horizon, Rank) %>%
+  ungroup()
+```
+
+```{r lasso plug-in nprev=100}
+horizons <- c(1,3,6,12)
+save_path <- "rlasso_results_100.rds"
+
+# Load previous progress if available
+if (file.exists(save_path)) {
+  results <- readRDS(save_path)
+  cat("Loaded existing results from", save_path, "\n")
+} else {
+  results <- list()
+  cat("Starting new results list\n")
+}
+
+runrlasso_Z <- function(Z, y, pl = FALSE) {
+  df <- as.data.frame(Z)
+  model <- rlasso(df, y, post = pl)
+  pred <- predict(model, newdata = tail(df, 1))
+  return(list(model = model, pred = pred))
+}
+
+rlasso.rolling.window.Z <- function(Z, y, nprev, pl = FALSE) {
+  if (length(y) > nrow(Z)) {
+    y <- tail(y, nrow(Z))
+  } else if (length(y) < nrow(Z)) {
+    Z <- Z[(nrow(Z) - length(y) + 1):nrow(Z), , drop = FALSE]
+  }
+  
+  n <- length(y)
+  save.pred <- rep(NA, nprev)
+  
+  for (i in seq_len(nprev)) {
+    print(i)
+    train_start <- i
+    train_end <- n - nprev + i - 1
+    
+    Z_train <- Z[train_start:train_end, ]
+    y_train <- y[train_start:train_end]
+    Z_test <- Z[train_end + 1, , drop = FALSE]
+    
+    model <- rlasso(Z_train, y_train, post = pl)
+    save.pred[i] <- predict(model, newdata = Z_test)
+  }
+  
+  real <- tail(y, nprev)
+  rmse <- sqrt(mean((real - save.pred)^2))
+  mae <- mean(abs(real - save.pred))
+  
+  return(list(pred = save.pred, errors = c(rmse = rmse, mae = mae)))
+}
+
+
+# === Detect and register cores ===
+n_cores <- parallel::detectCores() - 3  # leave a couple free
+cl <- makeCluster(n_cores)
+registerDoParallel(cl)
+
+cat("Running plug-in LASSO using", n_cores, "cores\n")
+
+
+
+# === MAIN LOOP ===
+all_Z_list <- readRDS("all_Z_matrices.rds")
+Z_list <- all_Z_list
+#Z_list = all_Z_list["Z_X"]
+y_t = y_t 
+nprev <- 100
+
+# Reorder Z_list by increasing number of columns (excluding sasdate)
+Z_order <- names(sort(sapply(Z_list, function(z) ncol(z))))
+Z_list <- Z_list[Z_order]
+
+for (z_name in names(Z_list)) {
+  Z_full <- Z_list[[z_name]]
+  Z <- Z_full %>% select(-sasdate)
+  cat("\n=============================\n")
+  cat("Running for:", z_name, "\n")
+
+  if (is.null(results[[z_name]])) results[[z_name]] <- list()
+
+  # Tail y to match Z
+  if (nrow(y_t) > nrow(Z)) {
+    y_aligned <- tail(y_t, nrow(Z))
+    cat("  Tailed y from", nrow(y_t), "to", nrow(y_aligned), "\n")
+  } else {
+    y_aligned <- y_t
+  }
+
+  cat("  First 3 Z dates:", paste(as.character(Z_full$sasdate[1:3]), collapse = ", "), "\n")
+  cat("  First 3 y dates:", paste(as.character(y_aligned$sasdate[1:3]), collapse = ", "), "\n")
+
+  # === Horizon loop ===
+  for (h in horizons) {
+    if (!is.null(results[[z_name]][[paste0("h", h)]])) {
+      cat("  Skipping horizon", h, "(already done)\n")
+      next
+    }
+
+    cat("  Horizon:", h, "\n")
+    y_h <- dplyr::lead(y_aligned$CPI_t, h)
+    valid_idx <- 1:(length(y_h) - h)
+
+    # === Parallel rolling window ===
+    preds <- foreach(i = seq_len(nprev), .combine = c, .packages = c("hdm")) %dopar% {
+      train_start <- i
+      train_end <- length(y_h[valid_idx]) - nprev + i - 1
+      Z_train <- Z[train_start:train_end, ]
+      y_train <- y_h[train_start:train_end]
+      Z_test  <- Z[train_end + 1, , drop = FALSE]
+
+      # plug-in lambda fit
+      model <- rlasso(Z_train, y_train, post = TRUE)
+      predict(model, newdata = Z_test)
+    }
+
+    # === Compute RMSE/MAE per horizon ===
+    real <- tail(y_h[valid_idx], nprev)
+    rmse <- sqrt(mean((real - preds)^2))
+    mae  <- mean(abs(real - preds)))
+
+    results[[z_name]][[paste0("h", h)]] <- list(
+      pred = preds,
+      errors = c(rmse = rmse, mae = mae)
+    )
+
+    cat("    Horizon", h, "done. RMSE:", round(rmse, 4), "MAE:", round(mae, 4), "\n")
+    saveRDS(results, save_path)
+    cat("  Progress saved to", save_path, "\n")
+  }
+
+  cat("*** Finished all horizons for", z_name, "***\n\n")
+}
+
+stopCluster(cl)
+
+
+# === Summary printout ===
+cat("\nSummary of results:\n")
+for (z_name in names(results)) {
+  cat("Results for:", z_name, "\n")
+  for (h in horizons) {
+    if (!is.null(results[[z_name]][[paste0("h", h)]])) {
+      error_vec <- results[[z_name]][[paste0("h", h)]]$errors
+      cat("  Horizon", h, ": RMSE =", round(error_vec["rmse"], 4), 
+          ", MAE =", round(error_vec["mae"], 4), "\n")
+    } else {
+      cat("  Horizon", h, ": not yet computed\n")
+    }
+  }
+}
+
 
 ```
 
