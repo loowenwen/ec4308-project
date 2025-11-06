@@ -202,8 +202,8 @@ Z_Fraw_X_MAF <- align_by_date(F_lags_raw, X_t_lags, maf_data, y_lags)
 Z_X_MAF <- align_by_date(X_t_lags, maf_data, y_lags)
 
 #F-X-MARX-Level: Using factors + stationary lagged Xs + MARX + Levels (raw Xs and Y_t)  
-Z_Fstationary_X_MARX_Level <- align_by_date(F_lags_stationary, X_t_lags, maf_data, y_lags, y_t)
-Z_Fraw_X_MARX_Level <- align_by_date(F_lags_raw, X_t_lags, maf_data, y_lags, y_t)
+Z_Fstationary_X_MARX_Level <- align_by_date(F_lags_stationary, X_t_lags, maf_data, y_lags, y_t %>% select(-c(CPI_raw,CPI_t)))
+Z_Fraw_X_MARX_Level <- align_by_date(F_lags_raw, X_t_lags, maf_data, y_lags, y_t %>% select(-c(CPI_raw,CPI_t)))
 
 
 
