@@ -23,7 +23,7 @@ y_var <- bind_rows(y_train, y_test) %>%
 #--------------------------
 # Parameters
 #--------------------------
-parameters_boost <- c(300, 400, 500)       # toy value for quick testing; replace with e.g. c(350,400)
+parameters_boost <- c(20, 200, 500)       # toy value for quick testing; replace with e.g. c(350,400)
 datasets <- c("Z_X_MARX")           # change to more datasets if you wish
 time_horizons <- c(1, 3, 6, 12)
 
