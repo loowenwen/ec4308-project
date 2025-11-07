@@ -18,7 +18,7 @@ create_lags <- function(df, n_lags, dates) {
   }
   
   lagged_df <- do.call(cbind, lagged_list)
-  lagged_df <- cbind(date = dates, lagged_df)
+  lagged_df <- cbind(sasdate = dates, lagged_df)
   return(lagged_df)
 }
 
@@ -82,25 +82,18 @@ dates_yt <- y_full$sasdate
 X_t_raw <- X_t_raw_withdate %>% select(-sasdate)
 y_t <- y_full
 
-<<<<<<< HEAD
+
 # ---- Lagged target -------------------------------------------------
-y_lags_with_date <- create_lags(y_t%>% select(-c(CPI_raw,CPI_t)), p_y, dates_yt)
-y_lags <- create_lags(y_t %>% select(-c(CPI_raw,CPI_t,-sasdate)), p_y, dates_yt)
+y_lags_with_date <- create_lags(y_t%>% select(-sasdate), p_y, dates_yt)%>% select(-c(CPI_raw,CPI_t))
+y_lags <- create_lags(y_t %>% select(-sasdate), p_y, dates_yt)%>% select(-c(sasdate, CPI_raw,CPI_t))
 
 # ---- Lagged X (using stationary Xs) ------------------------------------------------------
-=======
-# ---- Lagged y and X ----
-y_lags <- create_lags(y_t %>% select(-sasdate), p_y, dates_yt)
->>>>>>> 5cac42386ea0d8619a7729eaa05891101b77d502
 X_t_lags <- create_lags(X_t, p_m, dates_Xt)
 
 # ---- MARX & MAF ----
 marx_data <- create_marx(X_t, max_lag = 12, dates_Xt)
 maf_data <- create_maf(X_t, n_lags = 12, n_pcs = 2, dates_Xt)
 
-# ---------------------- 4. Save static components -------------------------
-
-<<<<<<< HEAD
 
 
 # ---------------------- 3. Build Z-matrices (based on paper, every Z will include y-lags regardless + sasdate) ---------------
@@ -166,21 +159,8 @@ saveRDS(
     #Z_Fstationary_X_MARX_Level = Z_Fstationary_X_MARX_Level,
     #Z_Fraw_X_MARX_Level = Z_Fraw_X_MARX_Level,
     Z_F_X_MARX_Level_naked = Z_F_X_MARX_Level_naked
-=======
-saveRDS(
-  list(
-    X_t = X_t,
-    X_t_raw = X_t_raw,
-    y_t = y_t,
-    y_lags = y_lags,
-    X_t_lags = X_t_lags,
-    marx_data = marx_data,
-    maf_data = maf_data,
-    dates_Xt = dates_Xt,
-    dates_Xtraw = dates_Xtraw
->>>>>>> 5cac42386ea0d8619a7729eaa05891101b77d502
   ),
-  file = "base_features_static.rds"
+  file = "all_Z_matrices.rds"
 )
 
 message("✅ Static feature engineering complete. Ready for rolling PCA.")
