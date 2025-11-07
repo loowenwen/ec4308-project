@@ -1,174 +1,106 @@
-library(stats)     
-library(zoo)   
+library(stats)
+library(zoo)
 library(tidyverse)
 library(purrr)
 
 # ---------------------- 1. Helper Functions -------------------------
 
-#function to create lag variables
-create_lags <- function(df, p, dates) {
-  stopifnot(nrow(df) == length(dates))
+# Create lag variables
+create_lags <- function(df, n_lags, dates) {
+  lagged_list <- list(df)  # Start with the original (unlagged) variables
+  colnames(lagged_list[[1]]) <- colnames(df)  # ensure names are preserved
   
-  if (p == 0) return(tibble(sasdate = dates, df))
+  # Add lagged versions
+  for (l in 1:n_lags) {
+    lagged <- dplyr::lag(df, l)
+    colnames(lagged) <- paste0(colnames(df), "_lag", l)
+    lagged_list[[l + 1]] <- lagged
+  }
   
-  # Create lagged variables
-  lagged <- lapply(1:p, function(l) lag(df, l))
-  lagged_df <- do.call(cbind, lagged)
-  colnames(lagged_df) <- paste0(rep(colnames(df), each = p), "_L", 1:p)
-  
-  # Include the original variables
-  full_df <- cbind(df, lagged_df)
-  
-  valid_rows <- (p + 1):nrow(df)
-  tibble(
-    sasdate = dates[valid_rows],
-    as.data.frame(full_df[valid_rows, , drop = FALSE])
-  )
+  lagged_df <- do.call(cbind, lagged_list)
+  lagged_df <- cbind(date = dates, lagged_df)
+  return(lagged_df)
 }
 
-#align by common date
-align_by_date<- function(...) {
-  dfs <- list(...)
-  min_rows <- min(sapply(dfs, nrow))
-  dfs_trimmed <- lapply(dfs, function(x) x[(nrow(x)-min_rows+1):nrow(x), , drop=FALSE])
-  Reduce(function(x,y) cbind(x, y[ , setdiff(names(y), "sasdate")]), dfs_trimmed)
-}
-
-# align_by_date <- function(...) {
-#   dfs <- list(...)
-#   
-#   # 1. Find common dates across all input tibbles
-#   common_dates <- Reduce(intersect, lapply(dfs, `[[`, "sasdate"))
-#   
-#   # 2. Align and drop NA rows
-#   dfs_aligned <- lapply(dfs, function(x) {
-#     x %>%
-#       filter(sasdate %in% common_dates) %>%
-#       drop_na()
-#   })
-#   
-#   # 3. Merge everything into a single tibble by "sasdate"
-#   df_merged <- Reduce(function(x, y) left_join(x, y, by = "sasdate"), dfs_aligned)
-#   
-#   # 4. Return merged dataset
-#   return(df_merged)
-# }
-
-#MARX Function (general idea: each column is the last p lags of each variable)
-create_marx <- function(df, max_lag, dates) {          
+# MARX transformation
+create_marx <- function(df, max_lag, dates) {
   stopifnot(nrow(df) == length(dates))
   n <- nrow(df); k <- ncol(df)
   marx_matrix <- matrix(NA, nrow = n - max_lag, ncol = k * max_lag)
   
   for (p in 1:max_lag) {
-    for (k_idx in 1:k) {
-      col_idx <- (p - 1) * k + k_idx
-      x <- as.matrix(df[, k_idx])
-      # embed(x, p) gives p lags (no current value)
-      x_embed <- embed(x, p)
-      x_ma    <- rowMeans(x_embed, na.rm = TRUE) / p
-      marx_matrix[, col_idx] <- tail(x_ma, n - max_lag)
-    }
+    lagged_df <- dplyr::lag(df, p)
+    marx_matrix[, ((p - 1) * k + 1):(p * k)] <- tail(as.matrix(lagged_df), n - max_lag)
   }
   
   marx_df <- as.data.frame(marx_matrix)
-  colnames(marx_df) <- paste0(rep(colnames(df), each = max_lag), "_MA", 1:max_lag)
+  colnames(marx_df) <- paste0(rep(colnames(df), each = max_lag), "_MARX", 1:max_lag)
   
-  # return tibble with sasdate
   tibble(sasdate = tail(dates, n - max_lag), marx_df)
 }
 
-#MAF Function
-create_maf <- function(df, n_lags = 12, n_pcs = 1, dates) {   # added dates
+# MAF transformation
+create_maf <- function(df, n_lags = 12, n_pcs = 1, dates) {
   stopifnot(nrow(df) == length(dates))
-  n <- nrow(df); k <- ncol(df)
-  maf_matrix <- matrix(NA, nrow = n, ncol = k * n_pcs)
-  colnames(maf_matrix) <- paste0(rep(colnames(df), each = n_pcs), "_PC", 1:n_pcs)
+  n <- nrow(df)
+  maf_list <- vector("list", ncol(df))
   
-  for (k_idx in 1:k){
+  for (k_idx in seq_along(df)) {
     x <- as.matrix(df[, k_idx])
-    lagged_mat <- embed(x, n_lags)               # n_lags columns = lags only
-    lagged_mat <- na.omit(lagged_mat)
-    n_rows <- nrow(lagged_mat)
+    lagged_mat <- embed(x, n_lags)
+    if (nrow(lagged_mat) < n_pcs) next
     
     pca_res <- prcomp(lagged_mat, scale. = TRUE)
     pcs <- pca_res$x[, 1:n_pcs, drop = FALSE]
-    
-    maf_matrix[(n_lags:n)[1:n_rows],
-               ((k_idx-1)*n_pcs + 1):(k_idx*n_pcs)] <- pcs
+    maf_list[[k_idx]] <- pcs
   }
   
-  # keep only rows where we have PCs (after n_lags)
-  valid_rows <- (n_lags + 1):n
-  tibble(sasdate = dates[valid_rows],
-         as.data.frame(maf_matrix[valid_rows, , drop = FALSE]))
+  maf_matrix <- do.call(cbind, maf_list)
+  colnames(maf_matrix) <- paste0(rep(colnames(df), each = n_pcs), "_MAF_PC", 1:n_pcs)
+  
+  tibble(
+    sasdate = tail(dates, nrow(maf_matrix)),
+    as.data.frame(maf_matrix)
+  )
 }
 
-# ---------------------- 2. Combining train and test sets back -------------------------
+# ---------------------- 2. Combine train/test -------------------------
 
-X_full = rbind(X_train, X_test)
-y_full = rbind(y_train, y_test)
+X_full <- rbind(X_train, X_test)
+y_full <- rbind(y_train, y_test)
 
-# ---------------------- 3. Preparing factor lags (F), MARX, MAF, X lag (X_lag) -------------------------
+# ---------------------- 3. Prepare transformations -------------------------
 
-p_y <- 4  #Number of lags for target 
-p_f <- 4  #Number of lags for factors 
-p_m <- 4 #Number of lags for X
+p_y <- 4
+p_m <- 4
 
-X_t <- X_full %>% select(-sasdate) #from data_cleaning.r (use this)
-X_t_raw_withdate <- fred_clean %>% select(-CPIAUCSL) 
-dates_Xt <- X_full$sasdate #when using stationary Xs
-dates_Xtraw <- X_t_raw_withdate$sasdate #when using non stationary Xs
-dates_yt <- y_full$sasdate #when using yt
-X_t_raw <- X_t_raw_withdate %>% select(-sasdate)  #use this
-
-# ---- Lagged F (on stationary Xs) ------------------------------------------------------
-
-#PCA on stationary Xs
-pca_stationaryX_result <- prcomp(X_t, scale. = TRUE)
-plot(pca_stationaryX_result, type = "l", main = "Scree Plot of PCA Factors (On Stationary Xs)", npcs = 125)
-summary(pca_stationaryX_result)
-num_factors <- 33 #explains 80% of variance
-
-
-F_t_stationary <- as.data.frame(pca_stationaryX_result$x[, 1:num_factors]) #F_t_stationary = 33 factors
-colnames(F_t_stationary) <- paste0("F", 1:num_factors)
-F_lags_stationary <- create_lags(F_t_stationary, p_f, dates_Xt) #F lag using stationary Xs
-
-
-# ---- Lagged F (on raw Xs) ------------------------------------------------------
-
-#PCA on stationary Xs
-pca_rawX_result <- prcomp(X_t_raw, scale. = TRUE)
-plot(pca_rawX_result, type = "l", main = "Scree Plot of PCA Factors (On Raw Xs)", npcs = 125)
-summary(pca_rawX_result)
-num_factors_raw <- 4 #explains 88% of variance
-
-F_t_raw <- as.data.frame(pca_rawX_result$x[, 1:num_factors_raw]) #F_t_raw = 4 factors
-colnames(F_t_raw) <- paste0("F", 1:num_factors_raw)
-F_lags_raw <- create_lags(F_t_raw, p_f, dates_Xtraw) #F lag using stationary Xs
-
-
-
-# ---- y_t Target (CPI Level) ------------------------
+X_t <- X_full %>% select(-sasdate)
+X_t_raw_withdate <- fred_clean %>% select(-CPIAUCSL)
+dates_Xt <- X_full$sasdate
+dates_Xtraw <- X_t_raw_withdate$sasdate
+dates_yt <- y_full$sasdate
+X_t_raw <- X_t_raw_withdate %>% select(-sasdate)
 y_t <- y_full
 
+<<<<<<< HEAD
 # ---- Lagged target -------------------------------------------------
 y_lags_with_date <- create_lags(y_t%>% select(-c(CPI_raw,CPI_t)), p_y, dates_yt)
 y_lags <- create_lags(y_t %>% select(-c(CPI_raw,CPI_t,-sasdate)), p_y, dates_yt)
 
 # ---- Lagged X (using stationary Xs) ------------------------------------------------------
+=======
+# ---- Lagged y and X ----
+y_lags <- create_lags(y_t %>% select(-sasdate), p_y, dates_yt)
+>>>>>>> 5cac42386ea0d8619a7729eaa05891101b77d502
 X_t_lags <- create_lags(X_t, p_m, dates_Xt)
 
-
-# ---- MARX ----------------------------------------------------------
+# ---- MARX & MAF ----
 marx_data <- create_marx(X_t, max_lag = 12, dates_Xt)
+maf_data <- create_maf(X_t, n_lags = 12, n_pcs = 2, dates_Xt)
 
-# ---- MAF -----------------------------------------------------------
-p_maf <- 12
-n_pcs <- 2
-maf_data  <- create_maf(X_t, n_lags = p_maf, n_pcs = n_pcs, dates_Xt)
+# ---------------------- 4. Save static components -------------------------
 
+<<<<<<< HEAD
 
 
 # ---------------------- 3. Build Z-matrices (based on paper, every Z will include y-lags regardless + sasdate) ---------------
@@ -234,15 +166,123 @@ saveRDS(
     #Z_Fstationary_X_MARX_Level = Z_Fstationary_X_MARX_Level,
     #Z_Fraw_X_MARX_Level = Z_Fraw_X_MARX_Level,
     Z_F_X_MARX_Level_naked = Z_F_X_MARX_Level_naked
+=======
+saveRDS(
+  list(
+    X_t = X_t,
+    X_t_raw = X_t_raw,
+    y_t = y_t,
+    y_lags = y_lags,
+    X_t_lags = X_t_lags,
+    marx_data = marx_data,
+    maf_data = maf_data,
+    dates_Xt = dates_Xt,
+    dates_Xtraw = dates_Xtraw
+>>>>>>> 5cac42386ea0d8619a7729eaa05891101b77d502
   ),
-  file = "all_Z_matrices.rds"
+  file = "base_features_static.rds"
 )
 
-## HOW TO RUN: Z_objects <- readRDS("all_Z_matrices.rds") (list of all)
+message("✅ Static feature engineering complete. Ready for rolling PCA.")
 
 
 
 
+# Rolling-window PCA function
+rolling_pca_lags <- function(X_full, dates_full, train_end_idx, max_lags = 4, var_threshold = 0.8, min_train = 50) {
+  # Subset training window
+  X_train <- X_full[1:train_end_idx, , drop = FALSE]
+  if (nrow(X_train) < min_train) return(NULL)
+  
+  # PCA on training data
+  pca_res <- prcomp(X_train, scale. = TRUE)
+  cum_var <- cumsum(pca_res$sdev^2) / sum(pca_res$sdev^2)
+  n_factors <- max(1, min(which(cum_var >= var_threshold)))
+  
+  # Factor scores for training period
+  F_train <- predict(pca_res)[, 1:n_factors, drop = FALSE]
+  F_train <- as.data.frame(F_train)
+  colnames(F_train) <- paste0("F", 1:n_factors)
+  F_train <- cbind(date = dates_full[1:train_end_idx], F_train)
+  
+  # Add lags including original factors
+  lagged_factors <- create_lags(F_train[, -1, drop = FALSE], max_lags, dates_full[1:train_end_idx])
+  return(lagged_factors)
+}
 
+
+#rolling build Z matrice
+rolling_Z_builder <- function(X_t, X_t_raw, y_t, marx_data, 
+                              dates_Xt, dates_Xtraw,
+                              Z_names = c("Z_F_stationary", "Z_F_raw",
+                                          "Z_X", "Z_X_MARX",
+                                          "Z_Fstationary_X_MARX_","Z_Fraw_X_MARX_"),
+                              train_window = 100, max_lags = 4, var_threshold = 0.8, min_train = 50) {
+  
+  n <- nrow(X_t)
+  all_Z <- vector("list", n - train_window) # store Z matrices for each forecast date
+  names(all_Z) <- paste0("t+", 1:(n - train_window))
+  
+  # Helper: align by date
+  align_by_date <- function(...) {
+    dfs <- list(...)
+    min_rows <- min(sapply(dfs, nrow))
+    dfs_trimmed <- lapply(dfs, function(x) x[(nrow(x)-min_rows+1):nrow(x), , drop=FALSE])
+    Reduce(function(x,y) cbind(x, y[ , setdiff(names(y), "sasdate")]), dfs_trimmed)
+  }
+  
+  for (t_idx in (train_window + 1):n) {
+    train_start <- t_idx - train_window
+    train_end <- t_idx - 1
+    
+    # Subset training window
+    X_train <- X_t[train_start:train_end, , drop = FALSE]
+    X_raw_train <- X_t_raw[train_start:train_end, , drop = FALSE]
+    y_train <- y_t[train_start:train_end, , drop = FALSE]
+    marx_train <- marx_data[train_start:train_end, , drop = FALSE]
+    dates_train_Xt <- dates_Xt[train_start:train_end]
+    dates_train_Xtraw <- dates_Xtraw[train_start:train_end]
+    
+    Z_step <- list()
+    
+    for (Z_name in Z_names) {
+      if (Z_name == "Z_F_stationary") {
+        F_lags <- rolling_pca_lags(X_train, dates_train_Xt, nrow(X_train), max_lags, var_threshold, min_train)
+        Z_step[[Z_name]] <- align_by_date(F_lags, y_lags = create_lags(y_train %>% select(-sasdate), max_lags, dates_train_Xt))
+        
+      } else if (Z_name == "Z_F_raw") {
+        F_lags <- rolling_pca_lags(X_raw_train, dates_train_Xtraw, nrow(X_raw_train), max_lags, var_threshold, min_train)
+        Z_step[[Z_name]] <- align_by_date(F_lags, y_lags = create_lags(y_train %>% select(-sasdate), max_lags, dates_train_Xtraw))
+        
+      } else if (Z_name == "Z_X") {
+        Z_step[[Z_name]] <- align_by_date(create_lags(X_train, max_lags, dates_train_Xt),
+                                          create_lags(y_train %>% select(-sasdate), max_lags, dates_train_Xt))
+        
+      } else if (Z_name == "Z_X_MARX") {
+        Z_step[[Z_name]] <- align_by_date(create_lags(X_train, max_lags, dates_train_Xt),
+                                          marx_train,
+                                          create_lags(y_train %>% select(-sasdate), max_lags, dates_train_Xt))
+        
+      } else if (Z_name == "Z_Fstationary_X_MARX_") {
+        F_lags <- rolling_pca_lags(X_train, dates_train_Xt, nrow(X_train), max_lags, var_threshold, min_train)
+        Z_step[[Z_name]] <- align_by_date(F_lags,
+                                          create_lags(X_train, max_lags, dates_train_Xt),
+                                          marx_train,
+                                          create_lags(y_train %>% select(-sasdate), max_lags, dates_train_Xt))
+        
+      } else if (Z_name == "Z_Fraw_X_MARX_") {
+        F_lags <- rolling_pca_lags(X_raw_train, dates_train_Xtraw, nrow(X_raw_train), max_lags, var_threshold, min_train)
+        Z_step[[Z_name]] <- align_by_date(F_lags,
+                                          create_lags(X_train, max_lags, dates_train_Xt),
+                                          marx_train,
+                                          create_lags(y_train %>% select(-sasdate), max_lags, dates_train_Xt))
+      }
+    }
+    
+    all_Z[[paste0("t+", t_idx)]] <- Z_step
+  }
+  
+  return(all_Z)
+}
 
 

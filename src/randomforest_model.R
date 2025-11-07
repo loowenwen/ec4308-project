@@ -1,14 +1,86 @@
-# load libraries
-library(readr)
+# ---------- LOAD & SETUP ----------
 library(dplyr)
-library(tidyverse)
+library(lubridate)
 library(randomForest)
-
-# set seed for reproducibility
 set.seed(4308)
 
-# --------- BENCHMARK USING TRANSFORMED PREDICTORS ---------
+# ---------- HELPER: LEAD TARGET ----------
+make_horizon_target <- function(y_df, h) {
+  y_df %>%
+    arrange(sasdate) %>%
+    mutate(target = dplyr::lead(CPI_t, h)) %>%
+    select(sasdate, target)
+}
 
+make_horizon_target(y, 1)
+
+# ---------- HELPER: ROLLING RANDOM FOREST ----------
+rf_rolling_window <- function(X, y, nprev = 100, h = 1, ntree = 1000, mtry = NULL) {
+  # align target for horizon h
+  y_h = make_horizon_target(y, h)
+  
+  # merge predictors and target
+  df = X %>%
+    left_join(y_h, by = "sasdate") %>%
+    arrange(sasdate) %>%
+    drop_na()
+  
+  n = nrow(df)
+  train_end = n - nprev
+  
+  feature_cols = setdiff(names(df), c("sasdate", "target"))
+  
+  preds <- actuals <- dates <- numeric(nprev)
+  
+  cat("Rolling Window RF | Horizon =", h, "| OOS =", nprev, "\n")
+  
+  for (i in 1:nprev) {
+    train_idx <- 1:(train_end + i - 1)
+    test_idx  <- train_end + i
+    
+    train_x <- df[train_idx, feature_cols]
+    train_y <- df[train_idx, "target", drop = TRUE]
+    test_x  <- df[test_idx, feature_cols, drop = FALSE]
+    test_y  <- df[test_idx, "target", drop = TRUE]
+    
+    rf <- randomForest(
+      x = train_x,
+      y = train_y,
+      ntree = ntree,
+      mtry = ifelse(is.null(mtry), floor(sqrt(ncol(train_x))), mtry),
+      importance = TRUE
+    )
+    
+    yhat <- predict(rf, test_x)
+    
+    preds[i] <- yhat
+    actuals[i] <- test_y
+    dates[i] <- df$sasdate[test_idx]
+    
+    if (i %% 10 == 0 || i == 1) {
+      cat(sprintf("[%3d/%3d] %s | yhat = %.4f | actual = %.4f\n",
+                  i, nprev, as.character(df$sasdate[test_idx]), yhat, test_y))
+    }
+  }
+  
+  results <- tibble(
+    sasdate = as.Date(dates, origin = "1970-01-01"),
+    yhat = preds,
+    y = actuals
+  )
+  
+  rmse <- sqrt(mean((results$yhat - results$y)^2, na.rm = TRUE))
+  mae  <- mean(abs(results$yhat - results$y), na.rm = TRUE)
+  
+  cat(sprintf("Final RMSE = %.4f | MAE = %.4f\n", rmse, mae))
+  
+  list(
+    results = results,
+    metrics = tibble(H = h, RMSE = rmse, MAE = mae)
+  )
+}
+
+# ---------- USING PREDICTORS_TRANSFORMED DATA ----------
 # load the X values
 predictors_transformed <- read_csv("../data/predictors_transformed.csv")
 X <- predictors_transformed
@@ -17,183 +89,43 @@ X <- predictors_transformed
 cpi_target_full <- read_csv("../data/cpi_target_full.csv")
 y <- cpi_target_full[, -2]  # assuming column 2 is dropped
 
-runrf <- function(X, y, lag = 1) {
-  # combine both X and y using left join on sasdate
-  full_data <- X %>% left_join(y, by = "sasdate") %>% drop_na()
-  
-  # drop date column and convert to numeric matrix
-  data_mat <- as.matrix(full_data[, -1])
-  
-  # create 4 lags + forecast horizon shift (=lag)
-  temp <- embed(data_mat, 4 + lag)
-  
-  # define number of predictors (including target)
-  nvar <- ncol(data_mat)
-  
-  # y variable (inflation rate target = last column before embedding)
-  y_aligned <- temp[, nvar]
-  
-  # lagged predictors (drop future columns)
-  X_lagged <- temp[, -c(1:(nvar * lag))]
-  
-  # fit the random forest on default settings
-  model <- randomForest(X_lagged, y_aligned, importance = TRUE)
-  
-  # generate forecast (using the last available observation)
-  if (nrow(X_lagged) > 0) {
-    pred <- tail(predict(model, X_lagged), 1)
-  } else {
-    pred <- NA
-  }
-  
-  # return the estimated model and h-step forecast
-  return(list("model" = model, "pred" = pred))
-}
+# run for 1-month ahead forecast
+rf_h1 <- rf_rolling_window(X, y, nprev = 100, h = 1)
+saveRDS(rf_h1, "../data/rf_results/predictors_transformed_h1.rds")
 
-rf_rolling_window <- function(X, y, nprev, lag = 1) {
-  # combine into one full dataset
-  full_data <- X %>% 
-    left_join(y, by = "sasdate") %>% 
-    drop_na()
-  
-  # storage for outputs
-  save_importance <- vector("list", nprev)
-  save_pred <- matrix(NA, nprev, 1)
-  
-  # rolling window loop
-  for (i in nprev:1) {
-    # define the rolling estimation window
-    Y_window <- full_data[(1 + nprev - i):(nrow(full_data) - i), ]
-    
-    # call the RF forecasting function
-    rf_result <- runrf(
-      X = Y_window[, -ncol(Y_window)],  # all columns except target
-      y = Y_window[, c("sasdate", names(Y_window)[ncol(Y_window)])],  # sasdate + target
-      lag = lag
-    )
-    
-    # store predictions and variable importance
-    save_pred[(1 + nprev - i), ] <- rf_result$pred
-    save_importance[[i]] <- importance(rf_result$model)
-    
-    cat("Iteration", (1 + nprev - i), "completed. \n")
-  }
-  
-  # evaluation data
-  real <- full_data[[ncol(full_data)]]
-  time_axis <- full_data$sasdate
-  pred_padded <- c(rep(NA, length(real) - nprev), save_pred)
-  
-  # compute forecast errors
-  rmse <- sqrt(mean((tail(real, nprev) - save_pred)^2))
-  mae <- mean(abs(tail(real, nprev) - save_pred))
-  errors <- c("rmse" = rmse, "mae" = mae)
-  
-  # return everything cleanly
-  return(list(
-    pred = data.frame(sasdate = time_axis,
-                      actual = real,
-                      forecast = pred_padded),
-    errors = errors,
-    save_importance = save_importance
-  ))
-}
-
-# plotting function
-plot_rf_forecast <- function(rf_results, lag_val) {
-  # extract variables
-  time_axis <- as.Date(rf_results$pred$sasdate)
-  real <- rf_results$pred$actual
-  pred_padded <- rf_results$pred$forecast
-  rmse_val <- round(rf_results$errors["rmse"], 4)
-  mae_val  <- round(rf_results$errors["mae"], 4)
-  
-  # titles
-  main_title <- sprintf("RF Rolling Forecasts (Lag = %d Months)", lag_val)
-  sub_title  <- sprintf("RMSE = %.4f | MAE = %.4f", rmse_val, mae_val)
-  
-  # base R plot
-  plot(time_axis, real, type = "l",
-       main = main_title, sub = sub_title,
-       ylab = "Inflation", xlab = "Time",
-       col = "black", lwd = 1.2, xaxt = "n")
-  
-  # add forecast line
-  lines(time_axis, pred_padded, col = "red", lwd = 1.2)
-  
-  # add custom date axis
-  axis.Date(side = 1, at = seq(min(time_axis), max(time_axis), by = "1 year"),
-            format = "%Y")
-  
-  # legend and grid
-  legend("topleft", legend = c("Actual", "Forecast"),
-         col = c("black", "red"), lty = 1, bty = "n", horiz = TRUE)
-  grid(col = "gray80")
-}
+# run for other horizons
+rf_h3 <- rf_rolling_window(X, y, nprev = 100, h = 3)
+saveRDS(rf_h3, "../data/rf_results/predictors_transformed_h3.rds")
+rf_h6 <- rf_rolling_window(X, y, nprev = 100, h = 6)
+saveRDS(rf_h6, "../data/rf_results/predictors_transformed_h6.rds")
+rf_h12 <- rf_rolling_window(X, y, nprev = 100, h = 12)
+saveRDS(rf_h12, "../data/rf_results/predictors_transformed_h12.rds")
 
 
-# run the random forest with rolling window
-rf_results <- rf_rolling_window(
-  X = predictors_transformed,
-  y = cpi_target_full %>% select(sasdate, CPI_t),
-  nprev = 66,  # 66 out-of-sample forecasts (starting from 2020 Jan)
-  lag = 1      # 1-month ahead
-)
+# ---------- USING RAW DATA (NON-STATIONARY) ----------
+# load the X values
+# previously split on Jan 2020 
+fred_train <- read_csv("../data/fred_train.csv")
+fred_test <- read_csv("../data/fred_test.csv")
+predictors_raw <- bind_rows(list(fred_train, fred_test))
+X <- predictors_raw
 
-# plot graph
-plot_rf_forecast(rf_results, 1)
+# load the y values
+cpi_target_full <- read_csv("../data/cpi_target_full.csv")
+y <- cpi_target_full[, -2]  # assuming column 2 is dropped
 
-# view results
-print(rf_results$errors)
+# run for 1-month ahead forecast
+rf_h1 <- rf_rolling_window(X, y, nprev = 100, h = 1)
+saveRDS(rf_h1, "../data/rf_results/predictors_raw_h1.rds")
+cat("\nCompleted 1-month ahead forecast at", format(Sys.time(), "%H:%M:%S"), "\n")
 
-
-# --------- SAVE RESULTS ---------
-saveRDS(rf_results, file = "../data/rf_results/predictors_transformed_lag1.rds")
-
-
-# --------- LOOP THROUGH FOR THE DIFFERENT LAGS ---------
-# run the random forest with rolling window across the different forecast horizons
-for (lag_val in c(1, 3, 6, 12)) {
-  cat("Starting Random Forest Rolling Forecast for Lag =", lag_val, "\n")
-  cat("🕒 Start Time:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
-  
-  # run rolling window random forest
-  rf_results <- rf_rolling_window(
-    X = predictors_transformed,
-    y = cpi_target_full %>% select(sasdate, CPI_t),
-    nprev = 66,    # 66 out-of-sample forecasts (starting from 2020 Jan)
-    lag = lag_val  # forecast horizon
-    )
-  
-  cat("Model Completed for Lag =", lag_val, "\n")
-  
-  # save the full rf_results object
-  result_filename <- sprintf("../data/rf_results/predictors_transformed_lag%d.rds", lag_val)
-  saveRDS(rf_results, file = result_filename)
-  
-  # save plot
-  png_filename <- sprintf("../figures/rf_results/predictors_transformed_lag%d_plot.png", lag_val)
-  png(png_filename, width = 800, height = 500)
-  plot_rf_forecast(rf_results, lag_val)
-  dev.off()
-  
-  # print key metrics
-  if (!is.null(rf_results$errors)) {
-    print(rf_results$errors)
-  }
-
-  cat("Saved Results to:", result_filename, "\n")
-  
-  cat("Finished Lag =", lag_val, "\n")
-  cat("End Time:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
-}
-  
-  
-
-
-
-
-# unpack all the Z matrices from feature engineering
-Z_objects <- readRDS("all_Z_matrices.rds")
-list2env(Z_objects, envir = .GlobalEnv)
-Z_matrices <- names(Z_objects)
+# run for other horizons
+rf_h3 <- rf_rolling_window(X, y, nprev = 100, h = 3)
+saveRDS(rf_h3, "../data/rf_results/predictors_raw_h3.rds")
+cat("\nCompleted 3-month ahead forecast at", format(Sys.time(), "%H:%M:%S"), "\n")
+rf_h6 <- rf_rolling_window(X, y, nprev = 100, h = 6)
+saveRDS(rf_h6, "../data/rf_results/predictors_raw_h6.rds")
+cat("\nCompleted 6-month ahead forecast at", format(Sys.time(), "%H:%M:%S"), "\n")
+rf_h12 <- rf_rolling_window(X, y, nprev = 100, h = 12)
+saveRDS(rf_h12, "../data/rf_results/predictors_raw_h12.rds")  
+cat("\nCompleted 12-month ahead forecast at", format(Sys.time(), "%H:%M:%S"), "\n")
