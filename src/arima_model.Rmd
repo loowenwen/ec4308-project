@@ -35,7 +35,7 @@ y_train <- read.csv("../data/y_train.csv")
 ## Model: all X's 
 ### Rolling Window forecast functions
 ```{r}
-nprev = nrow(test)          #test window
+nprev = 100          #test window
 
 all_X <- rbind(train, test)
 all_X <- all_X %>% select(-sasdate)
@@ -113,38 +113,6 @@ arima.rmse12 = arima12c$errors[1]
 ```
 
 
-
-
-
-
-
-
-## Model 2: First 25 PCs + Chosen X's
-### PCA
-```{r}
-#Normalize the data
-data_normalized <- data.frame( scale(data[, 2:127]))
-
-# Splitting into train-validation-test sets
-train_normalized <- data_normalized[1:180, ]
-validation_normalized <- data_normalized[181:240, ]
-test_normalized <- tail(data_normalized, 12)
-
-# Do PCA
-train_no_y_normal <- train_normalized %>% select(-CPIAUCSL) %>%         #remove Y variable 
-  mutate(across(everything(), as.numeric))
-
-data_pca <- prcomp(train_no_y_normal)
-summary(data_pca)    
-
-#Scree Plot
-plot(data_pca, type = "l", main = "Scree Plot of PCA Factors", npcs = 125)
-
-#Retain the first 25 PCs, it explains ~85% of the variance
-train_pca_25 <- data_pca$x[, 1:25]
-```
-
-### Model
 
 
 
