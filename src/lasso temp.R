@@ -4,7 +4,7 @@ library(foreach)
 library(doParallel)
 
 horizons <- c(1,3,6,12)
-save_path <- "rlasso_bic_results.rds"
+save_path <- "rlasso_bic_results_100.rds"
 
 # Load previous progress if available
 if (file.exists(save_path)) {
@@ -19,12 +19,16 @@ if (file.exists(save_path)) {
 all_Z_list <- readRDS("all_Z_matrices.rds")
 Z_list <- all_Z_list
 y_t <- y_t
-nprev <- 66
+nprev <- 100
 Z_order <- names(sort(sapply(Z_list, function(z) ncol(z))))
 Z_list <- Z_list[Z_order]
 
+# Filter to keep only Zs without "F" in their names
+Z_list <- Z_list[!grepl("F", names(Z_list))]
+
 # Small lambda grid for BIC
-lambda_grid <- c(0.01, 0.1, 1)
+#lambda_grid <- c(0.01, 0.1, 1)
+lambda_grid <- 10^seq(-6,1,length.out=30)
 
 # Parallel setup
 n_cores <- parallel::detectCores() - 3
