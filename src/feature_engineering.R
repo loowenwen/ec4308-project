@@ -154,7 +154,8 @@ F_lags_raw <- create_lags(F_t_raw, p_f, dates_Xtraw) #F lag using stationary Xs
 y_t <- y_full
 
 # ---- Lagged target -------------------------------------------------
-y_lags <- create_lags(y_t %>% select(-sasdate), p_y, dates_yt)
+y_lags_with_date <- create_lags(y_t%>% select(-c(CPI_raw,CPI_t)), p_y, dates_yt)
+y_lags <- create_lags(y_t %>% select(-c(CPI_raw,CPI_t,-sasdate)), p_y, dates_yt)
 
 # ---- Lagged X (using stationary Xs) ------------------------------------------------------
 X_t_lags <- create_lags(X_t, p_m, dates_Xt)
@@ -174,12 +175,14 @@ maf_data  <- create_maf(X_t, n_lags = p_maf, n_pcs = n_pcs, dates_Xt)
 
 
 #F: Using factors only
-Z_F_stationary <- align_by_date(F_lags_stationary, y_lags)
-Z_F_raw <- align_by_date(F_lags_raw, y_lags)
+#Z_F_stationary <- align_by_date(F_lags_stationary, y_lags)
+#Z_F_raw <- align_by_date(F_lags_raw, y_lags)
+Z_F_naked <- y_lags # for each naked, need to make 2 on ur end, one for Fraw and one for F stationary
 
 #F-Level: Using factors + Levels
-Z_F_Level_stationary <- align_by_date(F_lags_stationary,y_t %>% select(-c(CPI_raw,CPI_t)), y_lags)
-Z_F_Level_raw <- align_by_date(F_lags_raw, y_t %>% select(-c(CPI_raw,CPI_t)), y_lags)
+#Z_F_Level_stationary <- align_by_date(F_lags_stationary,y_t, y_lags)
+#Z_F_Level_raw <- align_by_date(F_lags_raw, y_t, y_lags)
+Z_F_Level_naked <- align_by_date(y_t, y_lags)
 
 #X: Using stationary lagged Xs only
 Z_X <- align_by_date(X_t_lags, y_lags)
@@ -191,39 +194,46 @@ Z_Ht <- align_by_date(X_t_raw_withdate, y_lags)
 Z_X_MARX <- align_by_date(X_t_lags, marx_data, y_lags)
 
 #F-X-MARX: Using factors + stationary lagged Xs + MARX (Coulombe’s top performer for tree methods)
-Z_Fstationary_X_MARX_ <- align_by_date(F_lags_stationary, X_t_lags, marx_data, y_lags)
-Z_Fraw_X_MARX_ <- align_by_date(F_lags_raw, X_t_lags, marx_data, y_lags)
+#Z_Fstationary_X_MARX_ <- align_by_date(F_lags_stationary, X_t_lags, marx_data, y_lags)
+#Z_Fraw_X_MARX_ <- align_by_date(F_lags_raw, X_t_lags, marx_data, y_lags)
+Z_F_X_MARX_naked <- align_by_date(X_t_lags, marx_data, y_lags)
 
 #F-X-MAF: Using factors + stationary lagged Xs + MAF
-Z_Fstationary_X_MAF <- align_by_date(F_lags_stationary, X_t_lags, maf_data, y_lags)
-Z_Fraw_X_MAF <- align_by_date(F_lags_raw, X_t_lags, maf_data, y_lags)
+#Z_Fstationary_X_MAF <- align_by_date(F_lags_stationary, X_t_lags, maf_data, y_lags)
+#Z_Fraw_X_MAF <- align_by_date(F_lags_raw, X_t_lags, maf_data, y_lags)
+Z_F_X_MAF_naked <- align_by_date(X_t_lags, maf_data, y_lags)
 
 #X-MAF: Using stationary lagged Xs + MAF  
 Z_X_MAF <- align_by_date(X_t_lags, maf_data, y_lags)
 
 #F-X-MARX-Level: Using factors + stationary lagged Xs + MARX + Levels (raw Xs and Y_t)  
-Z_Fstationary_X_MARX_Level <- align_by_date(F_lags_stationary, X_t_lags, maf_data, y_lags, y_t %>% select(-c(CPI_raw,CPI_t)))
-Z_Fraw_X_MARX_Level <- align_by_date(F_lags_raw, X_t_lags, maf_data, y_lags, y_t %>% select(-c(CPI_raw,CPI_t)))
-
+#Z_Fstationary_X_MARX_Level <- align_by_date(F_lags_stationary, X_t_lags, maf_data, y_lags, y_t)
+#Z_Fraw_X_MARX_Level <- align_by_date(F_lags_raw, X_t_lags, maf_data, y_lags, y_t)
+Z_F_X_MARX_Level_naked <- align_by_date(X_t_lags, maf_data, y_lags, y_t)
 
 
 ##SAVE AS RDS FILES
 saveRDS(
   list(
-    Z_F_stationary = Z_F_stationary,
-    Z_F_raw = Z_F_raw,
-    Z_F_Level_stationary = Z_F_Level_stationary,
-    Z_F_Level_raw = Z_F_Level_raw,
+    #Z_F_stationary = Z_F_stationary,
+    #Z_F_raw = Z_F_raw,
+    Z_F_naked = Z_F_naked,
+    #Z_F_Level_stationary = Z_F_Level_stationary,
+    #Z_F_Level_raw = Z_F_Level_raw,
+    Z_F_Level_naked = Z_F_Level_naked,
     Z_X = Z_X,
     Z_Ht = Z_Ht,
     Z_X_MARX = Z_X_MARX,
-    Z_Fstationary_X_MARX_ = Z_Fstationary_X_MARX_,
-    Z_Fraw_X_MARX_ = Z_Fraw_X_MARX_,
-    Z_Fstationary_X_MAF = Z_Fstationary_X_MAF,
-    Z_Fraw_X_MAF = Z_Fraw_X_MAF,
+    #Z_Fstationary_X_MARX_ = Z_Fstationary_X_MARX_,
+    #Z_Fraw_X_MARX_ = Z_Fraw_X_MARX_,
+    Z_F_X_MARX_naked = Z_F_X_MARX_naked,
+    #Z_Fstationary_X_MAF = Z_Fstationary_X_MAF,
+    #Z_Fraw_X_MAF = Z_Fraw_X_MAF,
+    Z_F_X_MAF_naked = Z_F_X_MAF_naked,
     Z_X_MAF = Z_X_MAF,
-    Z_Fstationary_X_MARX_Level = Z_Fstationary_X_MARX_Level,
-    Z_Fraw_X_MARX_Level = Z_Fraw_X_MARX_Level
+    #Z_Fstationary_X_MARX_Level = Z_Fstationary_X_MARX_Level,
+    #Z_Fraw_X_MARX_Level = Z_Fraw_X_MARX_Level,
+    Z_F_X_MARX_Level_naked = Z_F_X_MARX_Level_naked
   ),
   file = "all_Z_matrices.rds"
 )
