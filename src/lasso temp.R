@@ -83,7 +83,7 @@ for (z_name in names(Z_list)) {
       
       # Select lambda with minimum BIC
       best_lambda <- lambda_grid[which.min(bic_vals)]
-      model <- rlasso(Z_train, y_train, post = FALSE, lambda = best_lambda)
+      model <- glmnet(Z_train, y_train, alpha = 1, standardize = TRUE, intercept = TRUE, lambda = best_lambda)
       predict(model, newdata = Z_test)
     }
     
