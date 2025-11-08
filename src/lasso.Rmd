@@ -16,263 +16,22 @@ library(hdm)
 library(tidyverse)
 library(doParallel) #for parallel core running
 library(foreach)
+library(irlba)
+library(HDeconometrics)
 ```
 
-```{r helper functions}
-
-RMSE <- function(pred, truth){ 
-  return(sqrt(mean((truth - pred)^2)))
-}
-
-MSE <- function(pred, truth){ 
-  return(mean((truth - pred)^2)) 
-}
-
-# #scale a df using min-max from training data
-# minmax_scale <- function(df) {
-#   mins <- apply(df, 2, min, na.rm = TRUE)
-#   maxs <- apply(df, 2, max, na.rm = TRUE)
-#   
-#   scaled <- sweep(df, 2, mins, "-")
-#   scaled <- sweep(scaled, 2, maxs - mins, "/")
-#   
-#   list(scaled = scaled, mins = mins, maxs = maxs)
-# }
-# 
-# # APPLY previously fitted min-max parameters to a new dataset
-# minmax_apply <- function(df, mins, maxs) {
-#   scaled <- sweep(df, 2, mins, "-")
-#   scaled <- sweep(scaled, 2, maxs - mins, "/")
-#   return(scaled)
-# }
-# 
-# #Inverse transform (to get back actual values)
-# minmax_unscale <- function(scaled, mins, maxs) {
-#   unscaled <- sweep(scaled, 2, maxs - mins, "*")
-#   unscaled <- sweep(unscaled, 2, mins, "+")
-#   return(unscaled)
-# }
-  
-```
+```{r reading in environment variables}
+y_t
+X_t
 
 
-## Split Training and Validation Set, Test Set
-
-```{r set}
-# minmax scaling on all predictors and Y
-#scaled_part <- minmax_scale(Z_8[, !(names(Z_8) %in% c("sasdate"))])
-#df_scaled <- cbind(sasdate = Z_8$sasdate, scaled_part$scaled)
-
-#subsetting training and validation set
-df_train <- Z_8 %>%
-  mutate(sasdate = as.Date(sasdate, format = "%m/%d/%Y")) %>%
-  filter(year(sasdate) < 2020)
-df_test <- Z_8 %>%
-  mutate(sasdate = as.Date(sasdate, format = "%m/%d/%Y")) %>%
-  filter(year(sasdate)> 2019)
-
-df_train_nodate = df_train %>%
-  select(-sasdate)
-df_test_nodate = df_test %>%
-  select(-sasdate)
-
-#x and y var
-Y_train <- df_train[,"CPIAUCSL"]
-Y_test <- df_test[,"CPIAUCSL"]
-X_train <- df_train %>% select(-c(sasdate, CPIAUCSL))
-X_test <- df_test %>% select(-c(sasdate, CPIAUCSL))
-
-#validation set
-nprev=60 #number of out-of-sample observations (test window )
-Y_validation = tail(Y_train,nprev) 
-X_validation = tail(X_train,nprev)
-
-# actual training set - validation
-Y_train_smaller = Y_train[1:(length(Y_train) - 60)]
-X_train_smaller = X_train[1:(length(X_train) - 60)]
 ```
 
 
 ## LASSO
 
-```{r lasso with rolling window old}
-horizons <- c(1,3,6,12)
-save_path <- "rlasso_results.rds"
 
-# Load previous progress if available
-if (file.exists(save_path)) {
-  results <- readRDS(save_path)
-  cat("Loaded existing results from", save_path, "\n")
-} else {
-  results <- list()
-  cat("Starting new results list\n")
-}
-
-runrlasso_Z <- function(Z, y, pl = FALSE) {
-  df <- as.data.frame(Z)
-  model <- rlasso(df, y, post = pl)
-  pred <- predict(model, newdata = tail(df, 1))
-  return(list(model = model, pred = pred))
-}
-
-rlasso.rolling.window.Z <- function(Z, y, nprev, pl = FALSE) {
-  if (length(y) > nrow(Z)) {
-    y <- tail(y, nrow(Z))
-  } else if (length(y) < nrow(Z)) {
-    Z <- Z[(nrow(Z) - length(y) + 1):nrow(Z), , drop = FALSE]
-  }
-  
-  n <- length(y)
-  save.pred <- rep(NA, nprev)
-  
-  for (i in seq_len(nprev)) {
-    print(i)
-    train_start <- i
-    train_end <- n - nprev + i - 1
-    
-    Z_train <- Z[train_start:train_end, ]
-    y_train <- y[train_start:train_end]
-    Z_test <- Z[train_end + 1, , drop = FALSE]
-    
-    model <- rlasso(Z_train, y_train, post = pl)
-    save.pred[i] <- predict(model, newdata = Z_test)
-  }
-  
-  real <- tail(y, nprev)
-  rmse <- sqrt(mean((real - save.pred)^2))
-  mae <- mean(abs(real - save.pred))
-  
-  return(list(pred = save.pred, errors = c(rmse = rmse, mae = mae)))
-}
-
-
-# === Detect and register cores ===
-n_cores <- parallel::detectCores() - 3  # leave a couple free
-cl <- makeCluster(n_cores)
-registerDoParallel(cl)
-
-cat("Running plug-in LASSO using", n_cores, "cores\n")
-
-
-
-# === MAIN LOOP ===
-all_Z_list <- readRDS("all_Z_matrices.rds")
-Z_list <- all_Z_list
-#Z_list = all_Z_list["Z_X"]
-y_t = y_t 
-nprev <- 66
-
-# Reorder Z_list by increasing number of columns (excluding sasdate)
-Z_order <- names(sort(sapply(Z_list, function(z) ncol(z))))
-Z_list <- Z_list[Z_order]
-
-for (z_name in names(Z_list)) {
-  Z_full <- Z_list[[z_name]]
-  Z <- Z_full %>% select(-sasdate)
-  cat("\n=============================\n")
-  cat("Running for:", z_name, "\n")
-
-  if (is.null(results[[z_name]])) results[[z_name]] <- list()
-
-  # Tail y to match Z
-  if (nrow(y_t) > nrow(Z)) {
-    y_aligned <- tail(y_t, nrow(Z))
-    cat("  Tailed y from", nrow(y_t), "to", nrow(y_aligned), "\n")
-  } else {
-    y_aligned <- y_t
-  }
-
-  cat("  First 3 Z dates:", paste(as.character(Z_full$sasdate[1:3]), collapse = ", "), "\n")
-  cat("  First 3 y dates:", paste(as.character(y_aligned$sasdate[1:3]), collapse = ", "), "\n")
-
-  # === Horizon loop ===
-  for (h in horizons) {
-    if (!is.null(results[[z_name]][[paste0("h", h)]])) {
-      cat("  Skipping horizon", h, "(already done)\n")
-      next
-    }
-
-    cat("  Horizon:", h, "\n")
-    y_h <- dplyr::lead(y_aligned$CPI_t, h)
-    valid_idx <- 1:(length(y_h) - h)
-
-    # === Parallel rolling window ===
-    out <- foreach(i = seq_len(nprev), .packages = c("hdm")) %dopar% {
-      tryCatch({
-        rlasso.rolling.window.Z(
-          Z[valid_idx, ],
-          y_h[valid_idx],
-          nprev = 1,   # one-step rolling within each iteration
-          pl = TRUE    # plug-in lambda mode
-        )
-      }, error = function(e) {
-        return(list(error = conditionMessage(e)))
-      })
-    }
-
-    results[[z_name]][[paste0("h", h)]] <- out
-    cat("    Horizon", h, "done.\n")
-    saveRDS(results, save_path)
-    cat("  Progress saved to", save_path, "\n")
-  }
-
-  cat("*** Finished all horizons for", z_name, "***\n\n")
-}
-
-stopCluster(cl)
-
-
-# === Summary printout ===
-cat("\nSummary of results:\n")
-for (z_name in names(results)) {
-  cat("Results for:", z_name, "\n")
-  for (h in horizons) {
-    if (!is.null(results[[z_name]][[paste0("h", h)]])) {
-      error_vec <- results[[z_name]][[paste0("h", h)]]$errors
-      cat("  Horizon", h, ": RMSE =", round(error_vec["rmse"], 4), 
-          ", MAE =", round(error_vec["mae"], 4), "\n")
-    } else {
-      cat("  Horizon", h, ": not yet computed\n")
-    }
-  }
-}
-
- 
-# #reset some results
-# for (z in c("Z_F_raw", "Z_X_MARX", "Z_Fstationary_X_MARX_", "Z_Fraw_X_MARX_", "Z_F_Level_raw", "Z_F_Level_stationary")) {
-#   results[[z]] = NULL
-# }
-
-```
-
-```{r comparison}
-
-lasso_results <- readRDS("rlasso_results.rds")
-
-# collect RMSEs for each horizon
-mse_summary <- do.call(rbind, lapply(names(lasso_results), function(z_name) {
-  res_list <- lasso_results[[z_name]]
-  do.call(rbind, lapply(names(res_list), function(h) {
-    rmse_val <- res_list[[h]]$rmse
-    data.frame(
-      Z_name = z_name,
-      Horizon = h,
-      RMSE = rmse_val,
-      MSE = rmse_val^2
-    )
-  }))
-})) %>%
-  as.data.frame()
-
-# ranked each horizon (1 is smallest MSE)
-mse_ranked <- mse_summary %>%
-  group_by(Horizon) %>%
-  mutate(Rank = rank(MSE, ties.method = "first")) %>%
-  arrange(Horizon, Rank) %>%
-  ungroup()
-```
-
-```{r lasso plug-in nprev=100 non-F}
+```{r lasso plug-in non-F}
 horizons <- c(1,3,6,12)
 save_path <- "rlasso_results_100.rds"
 
@@ -422,12 +181,6 @@ mse_ranked <- mse_summary %>%
 
 ```{r lasso plug in F matrices nprev=100, no X}
 # --- Helper function: compute PCs and add lags ---
-get_pcs <- function(X, n_pcs = 32) {
-  svd_res <- irlba(scale(X), nv = n_pcs)
-  pcs <- svd_res$u %*% diag(svd_res$d)
-  return(pcs)
-}
-
 add_pca_factors <- function(X_train, X_test, n_pcs = 32, n_lags = 1) {
   # Train PCA basis on training X
   pcs_basis <- prcomp(scale(X_train), center = TRUE, scale. = TRUE, rank. = n_pcs)
@@ -458,8 +211,6 @@ add_pca_factors <- function(X_train, X_test, n_pcs = 32, n_lags = 1) {
 }
 
 # --- Main rolling window loop ---
-horizons <- c(1, 3, 6, 12)
-nprev <- 100
 n_pcs <- 32
 n_lags <- 4
 save_path <- "rlasso_results_100.rds"
@@ -542,5 +293,234 @@ for (z_name in names(Z_list)) {
 stopCluster(cl)
 
 ```
+```{r lasso bic no factors}
+alpha <- 1
+IC <- "bic"
+save_path <- "lasso_bic_results_100_icglm.rds"
 
+# Load previous progress if available
+if (file.exists(save_path)) {
+  results <- readRDS(save_path)
+  cat("Loaded existing results from", save_path, "\n")
+} else {
+  results <- list()
+  cat("Starting new results list\n")
+}
+
+
+# ---- parallel setup ----
+Z_list <- all_Z_list[
+  order(sapply(all_Z_list, ncol))
+]
+Z_list <- Z_list[!grepl("F", names(Z_list))]
+
+Z_list <- lapply(Z_list, function(df) {
+  df %>% drop_na()
+})
+
+results <- list()
+
+for (z_name in names(Z_list)) {
+  
+  Z_full <- Z_list[[z_name]]
+  Z <- Z_full %>% select(-sasdate)
+  y_vec <- tail(y_t$CPI_t, nrow(Z))
+  
+  cat("\n=============================\nRunning:", z_name, "\n")
+  
+  results[[z_name]] <- list()
+  
+  for (h in horizons) {
+    
+    cat("  Horizon:", h, "\n")
+    
+    y_target <- dplyr::lead(y_vec, h)[1:(nrow(Z) - h)]
+    Z_trim   <- Z[1:(nrow(Z) - h), ]
+    
+    window_size <- nrow(Z_trim) - nprev
+    
+    # parallel version of rolling window
+    pred_out <- foreach(i = seq_len(nprev), .combine = "c", .packages = c("hdm", "HDeconometrics")) %dopar% {
+      
+      train_start <- i
+      train_end   <- i + window_size - 1
+      
+      Z_train <- as.matrix(Z_trim[train_start:train_end, ])
+      y_train <- y_target[train_start:train_end]
+      Z_test  <- as.matrix(Z_trim[train_end + 1, ])
+      
+      if (sd(y_train) == 0 || all(is.na(y_train))) {
+        return(NA)
+      }
+      
+      model <- ic.glmnet(
+        x = Z_train,
+        y = y_train,
+        alpha = alpha,
+        crit = IC
+      )
+      
+      as.numeric(predict(model, Z_test))
+    }
+    
+    true_y <- tail(y_target, nprev)
+    
+    results[[z_name]][[paste0("h", h)]] <- list(
+      pred = pred_out,
+      rmse = sqrt(mean((true_y - pred_out)^2, na.rm = TRUE)),
+      mae  = mean(abs(true_y - pred_out), na.rm = TRUE)
+    )
+    
+    cat("    Horizon", h, "done.\n")
+    cat("    MSE:", round(results[[z_name]][[paste0("h", h)]]$rmse, 4),
+        "| MAE:", round(results[[z_name]][[paste0("h", h)]]$mae, 4), "\n")
+    saveRDS(results, save_path)
+    cat("  Progress saved to", save_path, "\n")
+  }
+}
+
+stopCluster(cl)  
+
+# print summary
+cat("\n=========== SUMMARY (LASSO via IC) ===========\n")
+for (z_name in names(results)) {
+  cat("Results for:", z_name, "\n")
+  for (h in horizons) {
+    err <- results[[z_name]][[paste0("h", h)]]
+    cat("  h =", h,
+        "| RMSE =", round(err$rmse, 4),
+        "| MAE =", round(err$mae, 4), "\n")
+  }
+}
+
+```
+
+
+```{r lasso bic WITH factors}
+alpha <- 1
+IC <- "bic"
+n_pcs <- 32
+n_lags <- 4
+save_path <- "lasso_bic_results_100_icglm.rds"
+
+# --- Load previous progress if available ---
+if (file.exists(save_path)) {
+  results <- readRDS(save_path)
+  cat("Loaded existing results from", save_path, "\n")
+} else {
+  results <- list()
+  cat("Starting new results list\n")
+}
+
+# --- Load data ---
+Z_list <- all_Z_list[
+  order(sapply(all_Z_list, ncol))
+]
+Z_list <- Z_list[grepl("F", names(Z_list))]
+Z_list <- Z_list[!grepl("MAF", names(Z_list))]
+
+# Predefined stationary X_t for PCA
+X_t <- X_t
+
+# Drop any remaining NAs (alr checked that they are due to lagging)
+Z_list <- lapply(Z_list, function(df) {
+  df %>% drop_na()
+})
+
+
+# --- Main Loop ---
+for (z_name in names(Z_list)) {
+  
+  Z_full <- Z_list[[z_name]]
+  Z <- Z_full %>% select(-sasdate)
+  y_vec <- tail(y_t$CPI_t, nrow(Z))
+  X_aligned <- tail(X_t, nrow(Z))
+  
+  cat("\n=============================\nRunning:", z_name, "\n")
+  results[[z_name]] <- list()
+  
+  for (h in horizons) {
+    cat("  Horizon:", h, "\n")
+    
+    y_target <- dplyr::lead(y_vec, h)[1:(nrow(Z) - h)]
+    Z_trim   <- Z[1:(nrow(Z) - h), ]
+    X_trim   <- X_aligned[1:(nrow(X_aligned) - h), ]
+    
+    window_size <- nrow(Z_trim) - nprev
+    
+    pred_out <- foreach(i = seq_len(nprev), .combine = "c",
+                        .packages = c("hdm", "HDeconometrics", "dplyr")) %dopar% {
+                          
+                          train_start <- i
+                          train_end   <- i + window_size - 1
+                          
+                          # --- Split windows ---
+                          Z_train_raw <- as.matrix(Z_trim[train_start:train_end, ])
+                          Z_test_raw  <- as.matrix(Z_trim[train_end + 1, ])
+                          X_train_raw <- as.matrix(X_trim[train_start:train_end, ])
+                          X_test_raw  <- as.matrix(X_trim[train_end + 1, ])
+                          y_train <- y_target[train_start:train_end]
+                          
+                          if (sd(y_train) == 0 || all(is.na(y_train))) {
+                            return(NA)
+                          }
+                          
+                          # --- Add PCA factors (same as old version) ---
+                          pcs_data <- add_pca_factors(
+                            X_train = X_train_raw,
+                            X_test  = X_test_raw,
+                            n_pcs   = n_pcs,
+                            n_lags  = n_lags
+                          )
+                          
+                          Z_train <- cbind(Z_train_raw, pcs_data$train_pcs)
+                          Z_test  <- cbind(Z_test_raw, pcs_data$test_pcs)
+                          
+                          # drop rows with any NA in training set, align y_train accordingly
+                          na_rows <- apply(Z_train, 1, function(x) any(is.na(x)))
+                          Z_train <- Z_train[!na_rows, , drop = FALSE]
+                          y_train <- y_train[!na_rows]
+                          
+                          # --- Run ic.glmnet with information criterion ---
+                          model <- ic.glmnet(
+                            x = Z_train,
+                            y = y_train,
+                            alpha = alpha,
+                            crit = IC
+                          )
+                          
+                          # --- Predict next obs ---
+                          as.numeric(predict(model, newx = Z_test))
+                        }
+    
+    # --- Store results ---
+    true_y <- tail(y_target, nprev)
+    results[[z_name]][[paste0("h", h)]] <- list(
+      pred = pred_out,
+      rmse = sqrt(mean((true_y - pred_out)^2, na.rm = TRUE)),
+      mae  = mean(abs(true_y - pred_out), na.rm = TRUE)
+    )
+    
+    cat("    Horizon", h, "done.\n")
+    cat("    RMSE:", round(results[[z_name]][[paste0('h', h)]]$rmse, 4),
+        "| MAE:", round(results[[z_name]][[paste0('h', h)]]$mae, 4), "\n")
+    saveRDS(results, save_path)
+    cat("  Progress saved to", save_path, "\n")
+  }
+}
+
+stopCluster(cl)
+
+# --- Print Summary ---
+cat("\n=========== SUMMARY (ic.glmnet + PCA) ===========\n")
+for (z_name in names(results)) {
+  cat("Results for:", z_name, "\n")
+  for (h in horizons) {
+    err <- results[[z_name]][[paste0("h", h)]]
+    cat("  h =", h,
+        "| RMSE =", round(err$rmse, 4),
+        "| MAE =", round(err$mae, 4), "\n")
+  }
+}
+```
 
