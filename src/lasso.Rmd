@@ -95,148 +95,7 @@ X_train_smaller = X_train[1:(length(X_train) - 60)]
 
 ## LASSO
 
-```{r plug in lambda}
-# define horizons of interest
-horizons <- c(1,3,6,9,12)
-
-# store results
-rmse_vec <- numeric(length(horizons))
-mse_vec <- numeric(length(horizons))
-names(rmse_vec) <- paste0("h", horizons)
-names(mse_vec) <- paste0("h", horizons)
-pred_list <- list()
-
-for(i in seq_along(horizons)){
-  h <- horizons[i]
-  
-  # shifted target for training (x1t,x2t...-> y(t+h))
-  Y_train_h <- dplyr::lead(Y_train, h)
-  valid_idx <- !is.na(Y_train_h)
-  X_train_h <- as.matrix(X_train[valid_idx, ])
-  Y_train_h <- Y_train_h[valid_idx]
-  
-  # fit rlasso
-  fit <- rlasso(X_train_h, Y_train_h, post=FALSE)
-  
-  # shifted target for test
-  Y_test_h <- dplyr::lead(Y_test, h) %>% na.omit()
-  X_test_h <- as.matrix(X_test[1:length(Y_test_h), ])
-  
-  # predict
-  yhat <- predict(fit, newdata = X_test_h)
-  pred_list[[i]] <- yhat
-  
-  # compute MSE and RMSE
-  mse <- MSE(yhat, Y_test_h)
-  mse_vec[i] <- mse
-  rmse_vec[i] <- sqrt(mse)
-}
-
-mse_vec
-rmse_vec
-```
-
-```{r plug in lambda, post-lasso}
-
-# store results
-rmse_vec2 <- numeric(length(horizons))
-mse_vec2 <- numeric(length(horizons))
-names(rmse_vec2) <- paste0("h", horizons)
-names(mse_vec2) <- paste0("h", horizons)
-pred_list2 <- list()
-
-for(i in seq_along(horizons)){
-  h <- horizons[i]
-  
-  # shifted target for training (x1t,x2t...-> y(t+h))
-  Y_train_h <- dplyr::lead(Y_train, h)
-  valid_idx <- !is.na(Y_train_h)
-  X_train_h <- as.matrix(X_train[valid_idx, ])
-  Y_train_h <- Y_train_h[valid_idx]
-  
-  # fit rlasso
-  fit <- rlasso(X_train_h, Y_train_h, post=TRUE)
-  
-  # shifted target for test
-  Y_test_h <- dplyr::lead(Y_test, h) %>% na.omit()
-  X_test_h <- as.matrix(X_test[1:length(Y_test_h), ])
-  
-  # predict
-  yhat <- predict(fit, newdata = X_test_h)
-  pred_list2[[i]] <- yhat
-  
-  # compute MSE and RMSE
-  mse <- MSE(yhat, Y_test_h)
-  mse_vec2[i] <- mse
-  rmse_vec2[i] <- sqrt(mse)
-}
-
-mse_vec2
-rmse_vec2
-```
-
-
-```{r lasso with bic}
-rmse_vec3 <- numeric(length(horizons))
-mse_vec3 <- numeric(length(horizons))
-
-# setting user-defined grid
-# grid = 10^seq(10, -2, length = 100)
-
-# function to choose lambda via BIC 
-choose_lambda_bic <- function(X, Y, lambda_grid) {
-  n <- nrow(X)
-  fit <- glmnet(as.matrix(X), as.numeric(Y), alpha = 1, lambda = lambda_grid, standardize = FALSE)
-  
-  yhat <- predict(fit, as.matrix(X)) # predicted values
-  
-  # compute bic
-  rss <- colSums((yhat - as.numeric(Y))^2)
-  df <- fit$df
-  bic <- n * log(rss / n) + df * log(n)
-  
-  # choose best lambda
-  plot(bic~lambda_grid)
-  best_lambda <- lambda_grid[which.min(bic)]
-  return(best_lambda)
-}
-
-# find best lambda for all horizons FIND GOOD GRID PLSSSSS
-lambda_grid <- 10^seq(-4, 0.5, length.out = 100)
-
-best_lambdas <- c()
-
-for (h in horizons) {
-  Y_train_h <- Y_train[(1 + h):length(Y_train)]
-  X_train_h <- X_train[1:(nrow(X_train) - h), ]
-  
-  best_lambda <- choose_lambda_bic(X_train_h, Y_train_h, lambda_grid)
-  best_lambdas <- c(best_lambdas, best_lambda)
-  
-  cat("h =", h, ": best lambda (BIC) =", round(best_lambda, 6), "\n")
-  
-  # fit models with best lambda
-  fit <- glmnet(as.matrix(X_train_h), as.numeric(Y_train_h),
-                alpha = 1, lambda = best_lambda, standardize = FALSE)
-  
-  # predict on test set
-  # align test X with horizon h if needed
-  Y_test_h <- Y_test[(1 + h):length(Y_test)] #only start h steps after the first ytest obs
-  X_test_h <- X_test[1:(nrow(X_test) - h), ] #dont use the last h X obs
-  yhat <- predict(fit, as.matrix(X_test_h))
-
-  rmse <- RMSE(yhat, Y_test_h)
-  mse  <- MSE(yhat, Y_test_h)
-  mse_vec3[i] <- mse
-  rmse_vec3[i] <- rmse
-}
-
-mse_vec3
-rmse_vec3
-
-```
-
-```{r lasso with rolling window}
+```{r lasso with rolling window old}
 horizons <- c(1,3,6,12)
 save_path <- "rlasso_results.rds"
 
@@ -385,6 +244,7 @@ for (z_name in names(results)) {
 # }
 
 ```
+
 ```{r comparison}
 
 lasso_results <- readRDS("rlasso_results.rds")
@@ -412,7 +272,7 @@ mse_ranked <- mse_summary %>%
   ungroup()
 ```
 
-```{r lasso plug-in nprev=100}
+```{r lasso plug-in nprev=100 non-F}
 horizons <- c(1,3,6,12)
 save_path <- "rlasso_results_100.rds"
 
@@ -534,7 +394,7 @@ for (z_name in names(results)) {
 
 ```{r comparison}
 
-lasso_results <- readRDS("rlasso_results.rds")
+lasso_results <- readRDS("rlasso_results_100.rds")
 
 # collect RMSEs for each horizon
 mse_summary <- do.call(rbind, lapply(names(lasso_results), function(z_name) {
@@ -559,159 +419,128 @@ mse_ranked <- mse_summary %>%
   ungroup()
 ```
 
-```{r lasso plug-in nprev=100}
-horizons <- c(1,3,6,12)
+
+```{r lasso plug in F matrices nprev=100, no X}
+# --- Helper function: compute PCs and add lags ---
+get_pcs <- function(X, n_pcs = 32) {
+  svd_res <- irlba(scale(X), nv = n_pcs)
+  pcs <- svd_res$u %*% diag(svd_res$d)
+  return(pcs)
+}
+
+add_pca_factors <- function(X_train, X_test, n_pcs = 32, n_lags = 1) {
+  # Train PCA basis on training X
+  pcs_basis <- prcomp(scale(X_train), center = TRUE, scale. = TRUE, rank. = n_pcs)
+  
+  # Compute training PCs
+  pcs_train <- predict(pcs_basis, newdata = scale(X_train, center = pcs_basis$center, scale = pcs_basis$scale))
+  pcs_train_df <- as.data.frame(pcs_train)
+  colnames(pcs_train_df) <- paste0("PC", 1:n_pcs)
+  
+  # Compute test PCs
+  pcs_test <- predict(pcs_basis, newdata = scale(X_test, center = pcs_basis$center, scale = pcs_basis$scale))
+  pcs_test_df <- as.data.frame(pcs_test)
+  colnames(pcs_test_df) <- paste0("PC", 1:n_pcs)
+  
+  # Add lagged PCs to training data
+  if (n_lags > 0) {
+    for (lag_i in 1:n_lags) {
+      lagged_pcs <- dplyr::lag(pcs_train_df, lag_i)
+      colnames(lagged_pcs) <- paste0("PC", 1:n_pcs, "_lag", lag_i)
+      pcs_train_df <- cbind(pcs_train_df, lagged_pcs)
+      
+      # For test obs, take last available lag values from training
+      pcs_test_df[paste0("PC", 1:n_pcs, "_lag", lag_i)] <- tail(pcs_train_df, lag_i)[1, 1:n_pcs]
+    }
+  }
+  
+  list(train_pcs = pcs_train_df, test_pcs = pcs_test_df)
+}
+
+# --- Main rolling window loop ---
+horizons <- c(1, 3, 6, 12)
+nprev <- 100
+n_pcs <- 32
+n_lags <- 4
 save_path <- "rlasso_results_100.rds"
 
-# Load previous progress if available
 if (file.exists(save_path)) {
   results <- readRDS(save_path)
   cat("Loaded existing results from", save_path, "\n")
 } else {
   results <- list()
-  cat("Starting new results list\n")
 }
 
-runrlasso_Z <- function(Z, y, pl = FALSE) {
-  df <- as.data.frame(Z)
-  model <- rlasso(df, y, post = pl)
-  pred <- predict(model, newdata = tail(df, 1))
-  return(list(model = model, pred = pred))
-}
-
-rlasso.rolling.window.Z <- function(Z, y, nprev, pl = FALSE) {
-  if (length(y) > nrow(Z)) {
-    y <- tail(y, nrow(Z))
-  } else if (length(y) < nrow(Z)) {
-    Z <- Z[(nrow(Z) - length(y) + 1):nrow(Z), , drop = FALSE]
-  }
-  
-  n <- length(y)
-  save.pred <- rep(NA, nprev)
-  
-  for (i in seq_len(nprev)) {
-    print(i)
-    train_start <- i
-    train_end <- n - nprev + i - 1
-    
-    Z_train <- Z[train_start:train_end, ]
-    y_train <- y[train_start:train_end]
-    Z_test <- Z[train_end + 1, , drop = FALSE]
-    
-    model <- rlasso(Z_train, y_train, post = pl)
-    save.pred[i] <- predict(model, newdata = Z_test)
-  }
-  
-  real <- tail(y, nprev)
-  rmse <- sqrt(mean((real - save.pred)^2))
-  mae <- mean(abs(real - save.pred))
-  
-  return(list(pred = save.pred, errors = c(rmse = rmse, mae = mae)))
-}
-
-
-# === Detect and register cores ===
-n_cores <- parallel::detectCores() - 3  # leave a couple free
-cl <- makeCluster(n_cores)
-registerDoParallel(cl)
-
-cat("Running plug-in LASSO using", n_cores, "cores\n")
-
-
-
-# === MAIN LOOP ===
 all_Z_list <- readRDS("all_Z_matrices.rds")
-Z_list <- all_Z_list
-#Z_list = all_Z_list["Z_X"]
-y_t = y_t 
-nprev <- 100
+Z_list <- all_Z_list[grepl("F", names(all_Z_list))]
+Z_list <- Z_list[!grepl("MAF", names(Z_list))]
 
-# Reorder Z_list by increasing number of columns (excluding sasdate)
 Z_order <- names(sort(sapply(Z_list, function(z) ncol(z))))
 Z_list <- Z_list[Z_order]
 
+# Predefined stationary matrix X_t (should match row count with y_t and Z)
+X_t <- X_t
+
 for (z_name in names(Z_list)) {
-  Z_full <- Z_list[[z_name]]
-  Z <- Z_full %>% select(-sasdate)
-  cat("\n=============================\n")
-  cat("Running for:", z_name, "\n")
-
+  Z <- Z_list[[z_name]]
+  Z <- Z %>% select(-sasdate)
+  cat("\n=============================\nRunning for:", z_name, "\n")
+  
   if (is.null(results[[z_name]])) results[[z_name]] <- list()
-
-  # Tail y to match Z
+  
   if (nrow(y_t) > nrow(Z)) {
     y_aligned <- tail(y_t, nrow(Z))
-    cat("  Tailed y from", nrow(y_t), "to", nrow(y_aligned), "\n")
+    X_aligned <- tail(X_t, nrow(Z))
   } else {
     y_aligned <- y_t
+    X_aligned <- X_t
   }
-
-  cat("  First 3 Z dates:", paste(as.character(Z_full$sasdate[1:3]), collapse = ", "), "\n")
-  cat("  First 3 y dates:", paste(as.character(y_aligned$sasdate[1:3]), collapse = ", "), "\n")
-
-  # === Horizon loop ===
+  
   for (h in horizons) {
-    if (!is.null(results[[z_name]][[paste0("h", h)]])) {
+    hname <- paste0("h", h)
+    if (!is.null(results[[z_name]][[hname]])) {
       cat("  Skipping horizon", h, "(already done)\n")
       next
     }
-
+    
     cat("  Horizon:", h, "\n")
     y_h <- dplyr::lead(y_aligned$CPI_t, h)
     valid_idx <- 1:(length(y_h) - h)
-
-    # === Parallel rolling window ===
-    preds <- foreach(i = seq_len(nprev), .combine = c, .packages = c("hdm")) %dopar% {
+    
+    preds <- foreach(i = seq_len(nprev), .combine = c, .packages = c("hdm", "dplyr", "irlba")) %dopar% {
       train_start <- i
       train_end <- length(y_h[valid_idx]) - nprev + i - 1
-      Z_train <- Z[train_start:train_end, ]
+      
+      Z_train_raw <- Z[train_start:train_end, ]
       y_train <- y_h[train_start:train_end]
-      Z_test  <- Z[train_end + 1, , drop = FALSE]
-
-      # plug-in lambda fit
+      Z_test_raw <- Z[train_end + 1, , drop = FALSE]
+      
+      X_train_raw <- X_aligned[train_start:train_end, ]
+      X_test_raw <- X_aligned[train_end + 1, , drop = FALSE]
+      
+      # === Compute PCA factors from X_t and append to Z ===
+      pcs_data <- add_pca_factors(X_train_raw, X_test_raw, n_pcs = n_pcs, n_lags = n_lags)
+      Z_train <- cbind(Z_train_raw, pcs_data$train_pcs)
+      Z_test <- cbind(Z_test_raw, pcs_data$test_pcs)
+      
       model <- rlasso(Z_train, y_train, post = TRUE)
       predict(model, newdata = Z_test)
     }
-
-    # === Compute RMSE/MAE per horizon ===
+    
     real <- tail(y_h[valid_idx], nprev)
     rmse <- sqrt(mean((real - preds)^2))
-    mae  <- mean(abs(real - preds)))
-
-    results[[z_name]][[paste0("h", h)]] <- list(
-      pred = preds,
-      errors = c(rmse = rmse, mae = mae)
-    )
-
-    cat("    Horizon", h, "done. RMSE:", round(rmse, 4), "MAE:", round(mae, 4), "\n")
+    mae <- mean(abs(real - preds))
+    
+    results[[z_name]][[hname]] <- list(pred = preds, errors = c(rmse = rmse, mae = mae))
+    cat("    Horizon", h, "done. RMSE:", rmse, "MAE:", mae, "\n")
     saveRDS(results, save_path)
-    cat("  Progress saved to", save_path, "\n")
   }
-
-  cat("*** Finished all horizons for", z_name, "***\n\n")
+  
+  cat("*** Finished all horizons for", z_name, "***\n")
 }
 
 stopCluster(cl)
 
-
-# === Summary printout ===
-cat("\nSummary of results:\n")
-for (z_name in names(results)) {
-  cat("Results for:", z_name, "\n")
-  for (h in horizons) {
-    if (!is.null(results[[z_name]][[paste0("h", h)]])) {
-      error_vec <- results[[z_name]][[paste0("h", h)]]$errors
-      cat("  Horizon", h, ": RMSE =", round(error_vec["rmse"], 4), 
-          ", MAE =", round(error_vec["mae"], 4), "\n")
-    } else {
-      cat("  Horizon", h, ": not yet computed\n")
-    }
-  }
-}
-
-
 ```
-
-
 
 
