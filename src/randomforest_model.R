@@ -428,7 +428,7 @@ cpi_target_full <- read_csv("../data/cpi_target_full.csv")
 y <- cpi_target_full[, -2]  # assuming column 2 is dropped
 
 Z_list_to_run <- list(
-  Z_X        = Z_list$Z_X, 
+  # Z_X        = Z_list$Z_X, 
   Z_Ht       = Z_list$Z_Ht, 
   Z_X_MARX   = Z_list$Z_X_MARX
 )
