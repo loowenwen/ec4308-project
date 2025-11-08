@@ -102,7 +102,7 @@ maf_data <- create_maf(X_t, n_lags = 12, n_pcs = 2, dates_Xt)
 #F: Using factors only
 #Z_F_stationary <- align_by_date(F_lags_stationary, y_lags)
 #Z_F_raw <- align_by_date(F_lags_raw, y_lags)
-Z_F_naked <- y_lags # for each naked, need to make 2 on ur end, one for Fraw and one for F stationary
+Z_F_naked <- y_lags_with_date # for each naked, need to make 2 on ur end, one for Fraw and one for F stationary
 
 #F-Level: Using factors + Levels
 #Z_F_Level_stationary <- align_by_date(F_lags_stationary,y_t, y_lags)
