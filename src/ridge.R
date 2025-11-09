@@ -1,3 +1,14 @@
+#ridge_results_100_sep <- lapply(ridge_results_100, function(model) {
+  #lapply(model, function(horizon) {  list(
+    #  pred = horizon$pred,
+     # rmse = horizon$errors["rmse"],
+     # mae  = horizon$errors["mae"]
+#    )  }) })
+#saveRDS(ridge_results_100, "ridge_results_100.rds")
+
+
+
+
 # Purpose: Run ridge regression forecasts for both factor-augmented (F) and non-factor (non-F) datasets safely
 
 library(glmnet)
