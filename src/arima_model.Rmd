@@ -13,6 +13,7 @@ Load required libraries + helper functions
 ```{r}
 library(dplyr)
 library(forecast)
+library(ggplot2)
 
 
 RMSE_fn <- function(pred, truth){ 
@@ -112,7 +113,47 @@ arima.rmse6 = arima6c$errors[1]
 arima.rmse12 = arima12c$errors[1]
 ```
 
+### Save results to .rds
+```{r}
+results_list <- list(
+  h1  = list(pred = arima1c$pred,  errors = arima1c$errors),
+  h3  = list(pred = arima3c$pred,  errors = arima3c$errors),
+  h6  = list(pred = arima6c$pred,  errors = arima6c$errors),
+  h12 = list(pred = arima12c$pred, errors = arima12c$errors)
+)
 
+#Save results to rds
+#saveRDS(results_list, "arima_results.rds")
+```
 
+### Plot 
+```{r}
+plot_arima_results <- function(Y, pred_matrix, horizon){
+
+  actual <- tail(Y$CPI_t, nrow(pred_matrix))
+
+  plot_df <- data.frame(
+    Index = 1:length(actual),
+    Actual = actual,
+    Predicted = pred_matrix
+  )
+
+  ggplot(plot_df, aes(x = Index)) +
+    geom_line(aes(y = Actual, colour = "Actual"), size = 1.2) +
+    geom_line(aes(y = Predicted, colour = "Predicted"), size = 1.2) +
+    labs(title = paste("Actual vs Predicted (h =", horizon, ")"),
+         x = "Forecast Index",
+         y = "CPI") +
+    scale_colour_manual(values = c("Actual" = "black", "Predicted" = "blue")) +
+    theme_minimal() +
+    theme(legend.title = element_blank())
+}
+
+# Generate plots
+plot_arima_results(all_Y, arima1c$pred, 1)
+plot_arima_results(all_Y, arima3c$pred, 3)
+plot_arima_results(all_Y, arima6c$pred, 6)
+plot_arima_results(all_Y, arima12c$pred, 12)
+```
 
 

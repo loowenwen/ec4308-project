@@ -22,6 +22,14 @@ create_lags <- function(df, n_lags, dates) {
   return(lagged_df)
 }
 
+#align by date function
+align_by_date<- function(...) {
+  dfs <- list(...)
+  min_rows <- min(sapply(dfs, nrow))
+  dfs_trimmed <- lapply(dfs, function(x) x[(nrow(x)-min_rows+1):nrow(x), , drop=FALSE])
+  Reduce(function(x,y) cbind(x, y[ , setdiff(names(y), "sasdate")]), dfs_trimmed)
+}
+
 # MARX transformation
 create_marx <- function(df, max_lag, dates) {
   stopifnot(nrow(df) == length(dates))
@@ -169,7 +177,7 @@ message("✅ Static feature engineering complete. Ready for rolling PCA.")
 
 
 # Rolling-window PCA function
-rolling_pca_lags <- function(X_full, dates_full, train_end_idx, max_lags = 4, var_threshold = 0.8, min_train = 50) {
+#rolling_pca_lags <- function(X_full, dates_full, train_end_idx, max_lags = 4, var_threshold = 0.8, min_train = 50) {
   # Subset training window
   X_train <- X_full[1:train_end_idx, , drop = FALSE]
   if (nrow(X_train) < min_train) return(NULL)
@@ -192,26 +200,26 @@ rolling_pca_lags <- function(X_full, dates_full, train_end_idx, max_lags = 4, va
 
 
 #rolling build Z matrice
-rolling_Z_builder <- function(X_t, X_t_raw, y_t, marx_data, 
-                              dates_Xt, dates_Xtraw,
-                              Z_names = c("Z_F_stationary", "Z_F_raw",
-                                          "Z_X", "Z_X_MARX",
-                                          "Z_Fstationary_X_MARX_","Z_Fraw_X_MARX_"),
-                              train_window = 100, max_lags = 4, var_threshold = 0.8, min_train = 50) {
+#rolling_Z_builder <- function(X_t, X_t_raw, y_t, marx_data, 
+                              #dates_Xt, dates_Xtraw,
+                              #Z_names = c("Z_F_stationary", "Z_F_raw",
+    #                                      "Z_X", "Z_X_MARX",
+     #                                     "Z_Fstationary_X_MARX_","Z_Fraw_X_MARX_"),
+                             # train_window = 100, max_lags = 4, var_threshold = 0.8, min_train = 50) {
   
-  n <- nrow(X_t)
-  all_Z <- vector("list", n - train_window) # store Z matrices for each forecast date
-  names(all_Z) <- paste0("t+", 1:(n - train_window))
+# n <- nrow(X_t)
+ # all_Z <- vector("list", n - train_window) # store Z matrices for each forecast date
+#  names(all_Z) <- paste0("t+", 1:(n - train_window))
   
   # Helper: align by date
-  align_by_date <- function(...) {
+ # align_by_date <- function(...) {
     dfs <- list(...)
     min_rows <- min(sapply(dfs, nrow))
     dfs_trimmed <- lapply(dfs, function(x) x[(nrow(x)-min_rows+1):nrow(x), , drop=FALSE])
     Reduce(function(x,y) cbind(x, y[ , setdiff(names(y), "sasdate")]), dfs_trimmed)
   }
   
-  for (t_idx in (train_window + 1):n) {
+  #for (t_idx in (train_window + 1):n) {
     train_start <- t_idx - train_window
     train_end <- t_idx - 1
     
@@ -262,8 +270,10 @@ rolling_Z_builder <- function(X_t, X_t_raw, y_t, marx_data,
     all_Z[[paste0("t+", t_idx)]] <- Z_step
   }
   
-  return(all_Z)
-}
+ # return(all_Z)
+#}
 
+#saving the main variables
 
-
+saveRDS(y_t, file = "y_t.rds")
+saveRDS(X_t, file = "X_t.rds")

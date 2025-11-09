@@ -1,366 +1,241 @@
-library(dplyr)
+#ridge_results_100_sep <- lapply(ridge_results_100, function(model) {
+  #lapply(model, function(horizon) {  list(
+    #  pred = horizon$pred,
+     # rmse = horizon$errors["rmse"],
+     # mae  = horizon$errors["mae"]
+#    )  }) })
+#saveRDS(ridge_results_100, "ridge_results_100.rds")
+
+
+
+
+# Purpose: Run ridge regression forecasts for both factor-augmented (F) and non-factor (non-F) datasets safely
+
 library(glmnet)
-library(doParallel)
+library(dplyr)
+library(irlba)
 library(foreach)
+library(doParallel)
 
 
-static_features <- readRDS("base_features_static.rds")
-X_t         <- static_features$X_t          # transformed (stationary)
-X_t_raw     <- static_features$X_t_raw      # raw levels
-y_t         <- static_features$y_t          # CPI_t
-y_lags      <- static_features$y_lags       # lagged CPI
-X_t_lags    <- static_features$X_t_lags     # lagged predictors
-marx_data   <- static_features$marx_data    # extra variables
-
-## --------------------------------------------------------------
-## 2. Helper functions
-## --------------------------------------------------------------
-MSE  <- function(pred, truth) mean((pred - truth)^2, na.rm = TRUE)
-RMSE <- function(pred, truth) sqrt(MSE(pred, truth))
-MAE  <- function(pred, truth) mean(abs(pred - truth), na.rm = TRUE)
-
-rolling_pca_lags <- function(X_full, dates_full, train_end_idx, p_f = 4) {
-  X_train <- X_full[1:train_end_idx, , drop = FALSE]
-  if (nrow(X_train) < 50) return(NULL)
+add_pca_factors <- function(X_train, X_test, n_pcs = 32, n_lags = 1) {
+  # Fit PCA on training
+  pcs_basis <- prcomp(scale(X_train), center = TRUE, scale. = TRUE, rank. = n_pcs)
   
-  # PCA on training window
-  pca_res <- prcomp(X_train, scale. = TRUE)
-  cum_var <- cumsum(pca_res$sdev^2) / sum(pca_res$sdev^2)
-  n_factors <- max(1, min(which(cum_var >= 0.8)))
+  pcs_train <- predict(pcs_basis, newdata = scale(X_train, center = pcs_basis$center, scale = pcs_basis$scale))
+  pcs_train_df <- as.data.frame(pcs_train)
+  colnames(pcs_train_df) <- paste0("PC", 1:n_pcs)
   
-  # Factor scores for training period
-  F_train <- predict(pca_res)[, 1:n_factors, drop = FALSE]
-  F_train <- as.data.frame(F_train)
-  colnames(F_train) <- paste0("F", 1:n_factors)
-  F_train <- cbind(sasdate = dates_full[1:train_end_idx], F_train)
+  pcs_test <- predict(pcs_basis, newdata = scale(X_test, center = pcs_basis$center, scale = pcs_basis$scale))
+  pcs_test_df <- as.data.frame(pcs_test)
+  colnames(pcs_test_df) <- paste0("PC", 1:n_pcs)
   
-  # Add current + lags
-  create_lags(F_train[, -1], p_f, dates_full[1:train_end_idx])
-}
-
-clean_Z_matrix <- function(Z_mat, target_col = "CPI_t") {
-  if (!target_col %in% colnames(Z_mat)) stop(paste("Missing target:", target_col))
-  Z_mat <- Z_mat[!is.na(Z_mat[[target_col]]), ]
-  pred_cols <- setdiff(colnames(Z_mat), c("sasdate", target_col))
-  Z_mat <- Z_mat[!apply(Z_mat[, pred_cols, drop = FALSE], 1, anyNA), ]
-  Z_mat <- Z_mat[, !duplicated(colnames(Z_mat))]
-  rownames(Z_mat) <- NULL
-  Z_mat
-}
-
-create_lags <- function(df, p, dates) {
-  
-  stopifnot(is.data.frame(df), length(dates) >= nrow(df))
-  
-  ## Keep only rows that have a date
-  valid <- 1:nrow(df)
-  if (length(dates) > nrow(df)) {
-    dates <- dates[1:nrow(df)]  # in case dates is longer
-  }
-  
-  if (p == 0) {
-    return(tibble(sasdate = dates, df))
-  }
-  
-  ## Create lagged versions
-  lagged_list <- lapply(1:p, function(l) dplyr::lag(df, l))
-  lagged_df   <- do.call(cbind, lagged_list)
-  colnames(lagged_df) <- paste0(rep(colnames(df), each = p), "_L", rep(1:p, times = ncol(df)))
-  
-  ## Combine current + lags
-  full_df <- cbind(df, lagged_df)
-  
-  ## Valid rows: after p lags, no NA in lagged columns
-  valid_rows <- (p + 1):nrow(df)
-  
-  tibble(
-    sasdate = dates[valid_rows],
-    as.data.frame(full_df[valid_rows, , drop = FALSE])
-  )
-}
-
-## --------------------------------------------------------------
-## 3. Rolling-window PCA helper
-## --------------------------------------------------------------
-roll_pca_factors <- function(X_full, dates_full, train_end_idx, p_f = 4) {
-  X_train <- X_full[1:train_end_idx, , drop = FALSE]
-  if (nrow(X_train) < 50) return(NULL)  # safety
-  
-  pca_res <- prcomp(X_train, scale. = TRUE)
-  cum_var <- cumsum(pca_res$sdev^2) / sum(pca_res$sdev^2)
-  n_factors <- min(which(cum_var >= 0.8))
-  
-  F_all <- predict(pca_res, newdata = X_full)[, 1:n_factors, drop = FALSE]
-  F_all <- as.data.frame(F_all)
-  colnames(F_all) <- paste0("F", 1:n_factors)
-  
-  F_all <- cbind(sasdate = dates_full, F_all)
-  F_lags <- create_lags(F_all[, -1], p_f, dates_full)
-  F_lags
-}
-
-## --------------------------------------------------------------
-## 4. Build raw data pieces
-## --------------------------------------------------------------
-build_full_Z <- function(Z_type, p_f = 4) {
-  has_date <- function(df) "sasdate" %in% colnames(df)
-  inputs <- list(y_lags = y_lags, X_t_lags = X_t_lags,
-                 marx = marx_data, y_t = y_t)
-  if (grepl("^Z_F", Z_type)) {
-    inputs$X_t <- X_t; inputs$X_t_raw <- X_t_raw
-  }
-  
-  date_cols <- lapply(inputs, function(df) if (has_date(df)) df$sasdate else NULL)
-  date_cols <- date_cols[!sapply(date_cols, is.null)]
-  if (length(date_cols) == 0) stop("No sasdate found")
-  common_dates <- Reduce(intersect, date_cols)
-  
-  subset_to_common <- function(df) {
-    if (has_date(df)) {
-      df %>% filter(sasdate %in% common_dates) %>% arrange(sasdate)
-    } else {
-      df[seq_along(common_dates), , drop = FALSE]
+  # Add lagged PCs for training
+  if (n_lags > 0) {
+    for (lag_i in 1:n_lags) {
+      lagged_train <- dplyr::lag(pcs_train_df, lag_i)
+      colnames(lagged_train) <- paste0("PC", 1:n_pcs, "_lag", lag_i)
+      pcs_train_df <- cbind(pcs_train_df, lagged_train)
     }
   }
   
-  y_lags_win <- subset_to_common(y_lags)
-  X_lags_win <- subset_to_common(X_t_lags)
-  marx_win   <- subset_to_common(marx_data)
-  y_win      <- subset_to_common(y_t)
-  X_win <- X_win_raw <- NULL
-  if (grepl("^Z_F", Z_type)) {
-    X_win     <- subset_to_common(X_t) %>% select(-any_of("sasdate"))
-    X_win_raw <- subset_to_common(X_t_raw) %>% select(-any_of("sasdate"))
-  }
-  dates_win <- y_lags_win$sasdate
-  
-  list(
-    y_lags_win = y_lags_win,
-    X_lags_win = X_lags_win,
-    marx_win   = marx_win,
-    y_win      = y_win,
-    X_win      = X_win,
-    X_win_raw  = X_win_raw,
-    dates_win  = dates_win,
-    Z_type     = Z_type,
-    p_f        = p_f
-  )
-}
-
-
-## --------------------------------------------------------------
-## 5. Accurate Ridge Forecast – Rolling PCA + Purged CV (FINAL)
-## --------------------------------------------------------------
-accurate_ridge_forecast <- function(Z_parts, nprev = 100, horizons = c(1,3,6,12)) {
-
-  y_raw   <- Z_parts$y_win$CPI_t
-  dates   <- Z_parts$dates_win
-  n_total <- length(y_raw)
-  
-  ## raw predictor matrix (only for factor models)
-  X_raw <- if (grepl("^Z_F", Z_parts$Z_type))
-    if (grepl("F_stationary", Z_parts$Z_type)) Z_parts$X_win
-  else Z_parts$X_win_raw
-  else NULL
-  
-  ## base matrix = lagged X / MARX + CPI target
-  base_mat <- switch(Z_parts$Z_type,
-                     "Z_X" = left_join(Z_parts$X_lags_win, Z_parts$y_lags_win, by = "sasdate"),
-                     "Z_X_MARX" = left_join(Z_parts$X_lags_win, Z_parts$marx_win, by = "sasdate") %>%
-                       left_join(Z_parts$y_lags_win, by = "sasdate"),
-                     "Z_F_stationary" = Z_parts$y_lags_win,
-                     "Z_F_raw"        = Z_parts$y_lags_win,
-                     "Z_Fstationary_X_MARX_" = left_join(Z_parts$X_lags_win, Z_parts$marx_win, by = "sasdate") %>%
-                       left_join(Z_parts$y_lags_win, by = "sasdate"),
-                     "Z_Fraw_X_MARX_" = left_join(Z_parts$X_lags_win, Z_parts$marx_win, by = "sasdate") %>%
-                       left_join(Z_parts$y_lags_win, by = "sasdate"),
-                     stop("Invalid Z_type")
-  )
-  base_mat <- clean_Z_matrix(base_mat, "CPI_t")
-  
-  min_train <- 120 + 12 + 10
-  first_train_end <- min_train
-  if (first_train_end + nprev > nrow(base_mat)) stop("Not enough data")
-  
-  ## --------------------------------------------------------------
-  ## 2. Loop over horizons
-  ## --------------------------------------------------------------
-  results <- list()
-  for (h in horizons) {
-    preds   <- actuals <- rep(NA, nprev)
-    
-    for (i in 1:nprev) {
-      train_end_idx <- first_train_end + i - 1
-      train_start   <- max(1, train_end_idx - 119)
-      
-      ## ----------------------------------------------------------
-      ## 2.1  Build the training window (base + rolling PCA)
-      ## ----------------------------------------------------------
-      Z_full <- base_mat %>% slice(1:train_end_idx)   # <-- defined first
-      
-      F_lagged <- NULL
-      if (grepl("^Z_F", Z_parts$Z_type)) {
-        F_lagged <- rolling_pca_lags(X_raw, dates, train_end_idx,
-                                     p_f = Z_parts$p_f)
-        if (is.null(F_lagged)) next
-        Z_full <- left_join(Z_full, F_lagged, by = "sasdate")
-      }
-      
-      Z_train <- clean_Z_matrix(Z_full, "CPI_t")
-      if (nrow(Z_train) < 100) next
-      
-      X_train <- as.matrix(Z_train %>% select(-sasdate, -CPI_t))
-      y_train <- Z_train$CPI_t
-      
-
-      # --- 3. Purged CV (h-step target) – NEVER skip, standardize = TRUE ---
-      y_cv <- y_train
-      if (sd(y_train) == 0 || length(unique(y_train)) <= 1) {
-        # Add *tiny* jitter only for CV (does NOT affect final model)
-        y_cv <- y_train + rnorm(length(y_train), 0, 1e-8)
-      }
-      
-      cv_folds  <- 5
-      fold_size <- max(1, floor(nrow(Z_train) / (cv_folds + 1)))
-      lambdas   <- 10^seq(3, -3, length = 50)
-      mse_folds <- matrix(NA, nrow = cv_folds, ncol = length(lambdas))
-      
-      for (f in 1:cv_folds) {
-        val_end   <- nrow(Z_train) - f * fold_size
-        val_start <- val_end - fold_size + 1
-        if (val_start <= 1) break
-        
-        train_cv <- X_train[1:(val_start-1), , drop = FALSE]
-        y_train_cv <- y_cv[1:(val_start-1)]
-        val_X    <- X_train[val_start:val_end, , drop = FALSE]
-        
-        val_y_idx <- (train_start + val_start - 1) + (h - 1) + (0:(val_end - val_start))
-        val_y    <- dplyr::lead(y_raw, h)[val_y_idx]
-        if (length(val_y) != nrow(val_X)) next
-        
-        # Jitter val_y if constant
-        if (sd(val_y) == 0) val_y <- val_y + rnorm(length(val_y), 0, 1e-8)
-        
-        for (j in seq_along(lambdas)) {
-          fit_cv <- glmnet(train_cv, y_train_cv,
-                           alpha = 0, lambda = lambdas[j],
-                           standardize = TRUE)  # ← ALWAYS TRUE
-          pred   <- predict(fit_cv, val_X, s = lambdas[j])
-          mse_folds[f, j] <- mean((pred - val_y)^2, na.rm = TRUE)
-        }
-      }
-      best_lambda <- lambdas[which.min(colMeans(mse_folds, na.rm = TRUE))]
-      
-
-      # --- 4. Final model – jitter only if y constant ---
-      y_final <- y_train
-      if (sd(y_train) == 0 || length(unique(y_train)) <= 1) {
-        y_final <- y_train + rnorm(length(y_train), 0, 1e-8)
-      }
-      
-      fit <- glmnet(X_train, y_final, alpha = 0, lambda = best_lambda, standardize = TRUE)
-      
-      ## ----------------------------------------------------------
-      ## 2.4  Build the test row (exact same column layout)
-      ## ----------------------------------------------------------
-      test_idx <- train_end_idx + 1
-      if (test_idx > nrow(base_mat)) break
-      
-      Z_test <- base_mat[test_idx, , drop = FALSE]
-      
-      if (!is.null(F_lagged)) {
-        ## reuse the PCA rotation from the training window
-        pca_res   <- prcomp(X_raw[1:train_end_idx, , drop = FALSE],
-                            scale. = TRUE)
-        n_factors <- ncol(F_lagged) - 1   # current + 4 lags → 5 cols per factor
-        n_factors <- n_factors %/% 5
-        
-        ## current factor scores for the test point
-        F_cur <- predict(pca_res,
-                         newdata = X_raw[test_idx, , drop = FALSE])[, 1:n_factors,
-                                                                    drop = FALSE]
-        F_cur <- as.data.frame(F_cur)
-        colnames(F_cur) <- paste0("F", 1:n_factors)
-        
-        ## reconstruct the full lagged row (current + 4 lags)
-        F_test_full <- F_cur
-        for (lg in 1:Z_parts$p_f) {
-          lag_cols <- paste0("F", 1:n_factors, "_l", lg)
-          lag_vals <- F_lagged %>%
-            filter(sasdate == dates[test_idx - lg]) %>%
-            select(all_of(lag_cols))
-          if (nrow(lag_vals) == 0) {
-            lag_vals <- matrix(NA, nrow = 1, ncol = n_factors)
-          }
-          colnames(lag_vals) <- lag_cols
-          F_test_full <- cbind(F_test_full, lag_vals)
-        }
-        Z_test <- cbind(Z_test, F_test_full)
-      }
-      
-      Z_test <- clean_Z_matrix(Z_test, "CPI_t")
-      if (nrow(Z_test) == 0) next
-      
-      X_test <- as.matrix(Z_test %>% select(-sasdate, -CPI_t))
-      
-      ## column-count safety
-      if (ncol(X_test) != ncol(X_train)) next
-      
-      preds[i]   <- drop(predict(fit, newx = X_test, s = best_lambda))
-      actual_idx <- test_idx + h - 1
-      if (actual_idx <= n_total) actuals[i] <- y_raw[actual_idx]
+  # Add lagged PCs for test
+  if (n_lags > 0) {
+    for (lag_i in 1:n_lags) {
+      # Take the last `lag_i` rows of the TRAINING set (before the forecast)
+      # This ensures the test lag reflects the latest known values
+      pcs_test_df[paste0("PC", 1:n_pcs, "_lag", lag_i)] <- 
+        tail(pcs_train_df[, paste0("PC", 1:n_pcs)], lag_i)[lag_i, , drop = FALSE]
     }
-    
-    results[[paste0("h", h)]] <- list(
-      pred = preds, real = actuals,
-      rmse = RMSE(preds, actuals), mae = MAE(preds, actuals)
-    )
   }
-  results
+  
+  list(train_pcs = pcs_train_df, test_pcs = pcs_test_df)
 }
 
-## --------------------------------------------------------------
-## 6. Parallel setup
-## --------------------------------------------------------------
-n_cores <- max(1, parallel::detectCores() - 2)
-cl <- makeCluster(n_cores)
-registerDoParallel(cl)
-options(warn = -1)
-on.exit(stopCluster(cl), add = TRUE)
-
-## --------------------------------------------------------------
-## 7. Parameters & main loop
-## --------------------------------------------------------------
-Z_names <- c("Z_F_stationary","Z_F_raw","Z_X","Z_X_MARX",
-             "Z_Fstationary_X_MARX_","Z_Fraw_X_MARX_")
+# --- Parameters ---
 horizons <- c(1, 3, 6, 12)
 nprev <- 100
-ridge_path <- "accurate_rolling_pca_ridge_results.rds"
+n_pcs <- 32
+n_lags <- 4
 
-all_ridge <- if (file.exists(ridge_path)) readRDS(ridge_path) else list()
-Z_to_do <- setdiff(Z_names, names(all_ridge))
+save_path <- "ridge_results_100.rds"
 
-for (Z_type in Z_to_do) {
-  cat("\n=== Rolling PCA + Ridge for", Z_type, "===\n")
-  Z_parts <- build_full_Z(Z_type, p_f = 4)
-  n_total <- nrow(Z_parts$y_win)
-  cat(" Aligned rows:", n_total, "\n")
-  
-  if (n_total < 120 + 12 + 10 + nprev) {
-    cat(" Not enough data, skipping\n")
-    next
-  }
-  
-  res <- accurate_ridge_forecast(Z_parts, nprev = nprev, horizons = horizons)
-  all_ridge[[Z_type]] <- res
-  saveRDS(all_ridge, ridge_path)
-  cat(" Saved. RMSEs:",
-      paste(sapply(horizons, function(h)
-        paste0("h", h, "=", round(res[[paste0("h", h)]]$rmse, 4))), collapse = " | "),
-      "\n")
+# ---------------- 2. Load or initialize results ----------------
+if (file.exists(save_path)) {
+  results <- readRDS(save_path)
+  cat("Loaded existing results from", save_path, "\n")
+} else {
+  results <- list()
+  cat("Starting new results list\n")
 }
 
-cat("\nAll done. Results in:", ridge_path, "\n")
+# ---------------- 3. Load feature matrices ----------------
+all_Z_list <- readRDS("all_Z_matrices.rds")
+
+# Filter: remove any matrices with "MAF" in name
+Z_list <- all_Z_list[!grepl("MAF", names(all_Z_list))]
+
+# Keep everything else (F, X, MARX, etc.)
+Z_order <- names(sort(sapply(Z_list, function(z) ncol(z))))
+Z_list <- Z_list[Z_order]
+
+cat("Feature sets to run:\n")
+print(names(Z_list))
+
+# ---------------- 4. Setup parallel backend ----------------
+n_cores <- parallel::detectCores() - 2
+cl <- makeCluster(n_cores)
+registerDoParallel(cl)
+cat("Running Ridge regression using", n_cores, "cores\n")
+
+
+
+nonF_Z_list <- Z_list[!grepl("F", names(Z_list))]
+
+for (z_name in names(nonF_Z_list)) {
+  Z <- nonF_Z_list[[z_name]] %>% select(-sasdate)
+  cat("\n=============================\nRunning for:", z_name, "\n")
+  
+  if (is.null(results[[z_name]])) results[[z_name]] <- list()
+  
+  # Align y_t and X_t to Z’s row count
+  if (nrow(y_t) > nrow(Z)) {
+    y_aligned <- tail(y_t, nrow(Z))
+    X_aligned <- tail(X_t, nrow(Z))  # may not be needed for non-F
+  } else {
+    y_aligned <- y_t
+    X_aligned <- X_t
+  }
+  
+  for (h in horizons) {
+    hname <- paste0("h", h)
+    if (!is.null(results[[z_name]][[hname]])) {
+      cat("  Skipping horizon", h, "(already done)\n")
+      next
+    }
+    
+    cat("  Horizon:", h, "\n")
+    y_h <- dplyr::lead(y_aligned$CPI_t, h)
+    valid_idx <- 1:(length(y_h) - h)
+    
+    preds <- foreach(i = seq_len(nprev), .combine = c,
+                     .packages = c("glmnet", "dplyr")) %dopar% {
+                       train_start <- i
+                       train_end <- length(y_h[valid_idx]) - nprev + i - 1
+                       
+                       Z_train <- Z[train_start:train_end, , drop = FALSE]
+                       y_train <- y_h[train_start:train_end]
+                       Z_test  <- Z[train_end + 1, , drop = FALSE]
+                       
+                       # Drop any fully NA columns
+                       Z_train <- Z_train[, colSums(is.na(Z_train)) < nrow(Z_train), drop = FALSE]
+                       Z_test  <- Z_test[, colnames(Z_train), drop = FALSE]
+                       
+                       # Drop rows with NA in training set
+                       valid_rows <- complete.cases(Z_train, y_train)
+                       Z_train <- Z_train[valid_rows, , drop = FALSE]
+                       y_train <- y_train[valid_rows]
+                       
+                       # Ridge regression
+                       lambda_grid <- 10^seq(5, -2, length = 50)
+                       model <- cv.glmnet(as.matrix(Z_train), y_train, alpha = 0, lambda = lambda_grid, standardize = TRUE)
+                       as.numeric(predict(model, newx = as.matrix(Z_test), s = "lambda.min"))
+                     }
+    
+    # Compute RMSE/MAE
+    real <- tail(y_h[valid_idx], nprev)
+    rmse <- sqrt(mean((real - preds)^2))
+    mae  <- mean(abs(real - preds))
+    
+    results[[z_name]][[hname]] <- list(pred = preds, errors = c(rmse = rmse, mae = mae))
+    cat("    Horizon", h, "done. RMSE:", round(rmse, 4), "MAE:", round(mae, 4), "\n")
+    saveRDS(results, save_path)
+  }
+  
+  cat("*** Finished all horizons for", z_name, "***\n")
+}
+
+
+
+###DOING THE Zs with Fs
+
+
+F_Z_list <- Z_list[grepl("F", names(Z_list))]
+
+for (z_name in names(F_Z_list)) {
+  Z <- F_Z_list[[z_name]] %>% select(-sasdate)
+  cat("\n=============================\nRunning for:", z_name, "\n")
+  
+  if (is.null(results[[z_name]])) results[[z_name]] <- list()
+  
+  # Align y_t and X_t to Z’s row count
+  if (nrow(y_t) > nrow(Z)) {
+    y_aligned <- tail(y_t, nrow(Z))
+    X_aligned <- tail(X_t, nrow(Z))
+  } else {
+    y_aligned <- y_t
+    X_aligned <- X_t
+  }
+  
+  for (h in horizons) {
+    hname <- paste0("h", h)
+    if (!is.null(results[[z_name]][[hname]])) {
+      cat("  Skipping horizon", h, "(already done)\n")
+      next
+    }
+    
+    cat("  Horizon:", h, "\n")
+    y_h <- dplyr::lead(y_aligned$CPI_t, h)
+    valid_idx <- 1:(length(y_h) - h)
+    
+    preds <- foreach(i = seq_len(nprev), .combine = c,
+                     .packages = c("glmnet", "dplyr", "irlba")) %dopar% {
+                       train_start <- i
+                       train_end <- length(y_h[valid_idx]) - nprev + i - 1
+                       
+                       Z_train_raw <- Z[train_start:train_end, ]
+                       y_train <- y_h[train_start:train_end]
+                       Z_test_raw <- Z[train_end + 1, , drop = FALSE]
+                       
+                       X_train_raw <- X_aligned[train_start:train_end, ]
+                       X_test_raw  <- X_aligned[train_end + 1, , drop = FALSE]
+                       
+                       # === Compute PCA factors and add lagged PCs ===
+                       pcs_data <- add_pca_factors(X_train_raw, X_test_raw, n_pcs = n_pcs, n_lags = n_lags)
+                       Z_train <- cbind(Z_train_raw, pcs_data$train_pcs)
+                       Z_test  <- cbind(Z_test_raw, pcs_data$test_pcs)
+                       
+                       # Align columns
+                       common_cols <- intersect(colnames(Z_train), colnames(Z_test))
+                       Z_train <- Z_train[, common_cols, drop = FALSE]
+                       Z_test  <- Z_test[, common_cols, drop = FALSE]
+                       
+                       # Drop fully NA columns
+                       Z_train <- Z_train[, colSums(is.na(Z_train)) < nrow(Z_train), drop = FALSE]
+                       Z_test  <- Z_test[, colnames(Z_train), drop = FALSE]
+                       
+                       # Drop rows with NA
+                       valid_rows <- complete.cases(Z_train, y_train)
+                       Z_train <- Z_train[valid_rows, , drop = FALSE]
+                       y_train <- y_train[valid_rows]
+                       
+                       # Ridge regression
+                       lambda_grid <- 10^seq(5, -2, length = 50)
+                       model <- cv.glmnet(as.matrix(Z_train), y_train, alpha = 0, lambda = lambda_grid, standardize = TRUE)
+                       as.numeric(predict(model, newx = as.matrix(Z_test), s = "lambda.min"))
+                     }
+    
+    real <- tail(y_h[valid_idx], nprev)
+    rmse <- sqrt(mean((real - preds)^2))
+    mae  <- mean(abs(real - preds))
+    
+    results[[z_name]][[hname]] <- list(pred = preds, errors = c(rmse = rmse, mae = mae))
+    cat("    Horizon", h, "done. RMSE:", round(rmse, 4), "MAE:", round(mae, 4), "\n")
+    saveRDS(results, save_path)
+  }
+  
+  cat("*** Finished all horizons for", z_name, "***\n")
+}
 
 
 # Collect RMSEs for each horizon
@@ -396,3 +271,142 @@ ggplot(fred_clean, aes(x = date, y = GDP)) +
     x = "Year",
     y = "GDP (in billions or appropriate units)"
   )
+
+
+
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(stringr)
+
+# Load saved results (if not already)
+results <- readRDS("ridge_results_100.rds")
+
+# Assume y_t has full CPI series
+actual_full <- y_t$CPI_t
+dates_full  <- y_t$sasdate
+nprev <- 100
+
+# --- Helper: extract all forecasts for all horizons ---
+extract_F_forecasts <- function(results, y_t, horizons, nprev) {
+  plot_list <- list()  # initialize inside function
+  
+  # Filter only factor-augmented models (names containing "F")
+  F_names <- names(results)[grepl("F", names(results))]
+  
+  for (z_name in F_names) {
+    for (h in horizons) {
+      hname <- paste0("h", h)
+      
+      preds <- results[[z_name]][[hname]]$pred
+      
+      # Lead y_t by h to align actuals with predictions
+      actuals <- dplyr::lead(y_t$CPI_t, h)
+      
+      # Only take the portion corresponding to your nprev predictions
+      actuals <- tail(actuals, nprev)
+      
+      plot_list[[paste(z_name, h, sep = "_")]] <- data.frame(
+        time = tail(y_t$date, nprev),  # or the corresponding time index
+        series = rep(c("actual", "pred"), each = length(preds)),
+        value = c(actuals, preds),
+        horizon = h,
+        model = z_name
+      )
+    }
+  }
+  
+  # Combine all into one dataframe
+  plot_long <- dplyr::bind_rows(plot_list)
+  return(plot_long)
+}
+
+
+ggplot(plot_long, aes(x = time, y = value, color = model, linetype = series, group = interaction(model, series))) +
+  geom_line(alpha = 0.9, linewidth = 0.6) +
+  facet_wrap(~ horizon, scales = "free_y", ncol = 2) +
+  scale_color_brewer(palette = "Set1") +  # each Z gets a distinct color
+  scale_linetype_manual(values = c("actual" = "solid", "pred" = "dashed")) +
+  labs(
+    title = "CPI Forecasts: Factor-Augmented Ridge Models",
+    subtitle = "Actual vs Predicted across all horizons",
+    x = "Time", y = "CPI",
+    color = "Model", linetype = "Series"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(face = "bold")
+  )
+
+
+plot_df <- extract_all_forecasts(results)
+
+# --- Combine into tidy long format ---
+plot_long <- plot_df %>%
+  pivot_longer(cols = c(actual, pred), names_to = "series", values_to = "value")
+
+# --- Plot all horizons and model types ---
+ggplot(plot_long, aes(x = time, y = value, color = series, group = interaction(model, series))) +
+  geom_line(alpha = 0.9, linewidth = 0.2) +
+  facet_wrap(~ horizon, scales = "free_y", ncol = 2) +
+  scale_color_manual(values = c("actual" = "black", "pred" = "#0072B2")) +
+  labs(
+    title = "CPI Forecasts: Factor-Augmented Ridge Models",
+    subtitle = "Actual vs Predicted across all horizons",
+    x = "Time", y = "CPI",
+    color = "Series"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(face = "bold")
+  )
+
+
+
+F_names <- names(ridge_results_100)[grepl("F", names(ridge_results_100))]
+
+# Extract RMSEs
+F_rmse_list <- lapply(F_names, function(z_name) {
+  res_list <- ridge_results_100[[z_name]]
+  sapply(res_list, function(h) h$errors["rmse"])
+})
+
+# Combine into a data frame
+F_rmse_df <- do.call(rbind, lapply(seq_along(F_rmse_list), function(i) {
+  data.frame(
+    Z_name = F_names[i],
+    Horizon = names(F_rmse_list[[i]]),
+    RMSE = as.numeric(F_rmse_list[[i]])
+  )
+}))
+
+
+rmse_df <- do.call(rbind, lapply(names(ridge_results_100), function(model_name) {
+  model <- ridge_results_100[[model_name]]
+  do.call(rbind, lapply(names(model), function(horizon) {
+    data.frame(
+      model = model_name,
+      horizon = horizon,
+      rmse = model[[horizon]]$rmse
+    )
+  }))
+}))
+rownames(rmse_df) <- NULL
+
+# Rank models by RMSE for each horizon (lower = better)
+library(dplyr)
+
+rmse_ranked <- rmse_df %>%
+  group_by(horizon) %>%
+  arrange(rmse, .by_group = TRUE) %>%
+  mutate(rank = row_number()) %>%
+  ungroup()
+
+# Show the ranking
+print(rmse_ranked)
+
+
