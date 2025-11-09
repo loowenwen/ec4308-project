@@ -269,6 +269,7 @@ rf_rolling_window_pca <- function(Z_naked, X_stationary, y, dates_X,
     
     actuals[i] <- test_y
     dates[i]   <- df$sasdate[test_idx]
+    df$sasdate <- as.numeric(as.Date(df$sasdate))
     
     if (i %% 10 == 0 || i == 1) {
       cat(sprintf("[%3d/%3d] %s | Stat=%.4f | Actual=%.4f\n",
@@ -373,8 +374,9 @@ for (h in horizons) {
 
 # ---------- LOOP THROUGH ALL Z'S THAT DOES FACTORS ON STATIONARY X's ----------
 Z_list_to_run <- list(
-  Z_Level_F        = Z_list$Z_F_Level_naked,
-  Z_X_MARX_F       = Z_list$Z_F_X_MARX_naked,
+  #Z_F              = Z_list$Z_F_naked,
+  #Z_Level_F        = Z_list$Z_F_Level_naked,
+  #Z_X_MARX_F       = Z_list$Z_F_X_MARX_naked,
   Z_X_MARX_Level_F = Z_list$Z_F_X_MARX_Level_naked
 )
 
@@ -401,7 +403,9 @@ for (Z_name in names(Z_list_to_run)) {
   
   # run across all horizons
   for (h in horizons) {
+    cat("\nStarting", h, "month(s) ahead forecast at", format(Sys.time(), "%H:%M:%S"), "\n")
     cat("\n--- Horizon", h, "months ahead ---\n")
+    
     
     rf_results <- rf_rolling_window_pca(
       Z_naked = Z_naked,
@@ -417,6 +421,7 @@ for (Z_name in names(Z_list_to_run)) {
     saveRDS(rf_results, save_path)
     
     cat("Saved results to:", save_path, "\n")
+    cat("\nCompleted", h, "month(s) ahead forecast at", format(Sys.time(), "%H:%M:%S"), "\n")
   }
 }
 
@@ -428,13 +433,13 @@ cpi_target_full <- read_csv("../data/cpi_target_full.csv")
 y <- cpi_target_full[, -2]  # assuming column 2 is dropped
 
 Z_list_to_run <- list(
-  # Z_X        = Z_list$Z_X, 
-  Z_Ht       = Z_list$Z_Ht, 
-  Z_X_MARX   = Z_list$Z_X_MARX
+  Z_X        = Z_list$Z_X,
+  Z_X_MARX   = Z_list$Z_X_MARX,
+  Z_Ht       = Z_list$Z_Ht
 )
 
 # loop settings
-horizons <- c(1, 3, 6, 12)
+horizons <- c(3, 6, 12)
 set.seed(4308)
 
 # main loop
@@ -457,5 +462,21 @@ for (Z_name in names(Z_list_to_run)) {
     
     cat("Saved results to:", save_path, "\n")
     cat("\nCompleted", h, "month(s) ahead forecast at", format(Sys.time(), "%H:%M:%S"), "\n")
+  }
+}
+
+
+ # ---------- FIXING SASDATE FOR ALL RESULTS FILE AS ITS NOT IN A DATE FORMAT ----------
+files <- list.files("../data/rf_results", pattern = "\\.rds$", full.names = TRUE)
+
+for (f in files) {
+  cat("Fixing dates in:", f, "\n")
+  obj <- readRDS(f)
+  
+  # only modify if it has a results tibble with sasdate column
+  if (is.list(obj) && "results" %in% names(obj) && "sasdate" %in% names(obj$results)) {
+    obj$results <- obj$results %>%
+      mutate(sasdate = as.Date(sasdate, origin = "1970-01-01"))
+    saveRDS(obj, f)
   }
 }
