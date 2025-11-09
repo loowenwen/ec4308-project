@@ -23,9 +23,8 @@ library(ggplot2)
 ```
 
 ```{r reading in environment variables}
-y_t
-X_t
-
+y_t = readRDS("y_t.rds")
+X_t = readRDS("X_t.rds")
 
 ```
 
@@ -59,7 +58,7 @@ cat("Running plug-in LASSO using", n_cores, "cores\n")
 # === MAIN LOOP ===
 all_Z_list <- readRDS("all_Z_matrices.rds")
 Z_list <- all_Z_list
-y_t = y_t 
+#y_t = y_t 
 nprev <- 100
 
 # Reorder Z_list by increasing number of columns (excluding sasdate)

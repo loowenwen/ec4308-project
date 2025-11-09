@@ -265,5 +265,7 @@ rolling_Z_builder <- function(X_t, X_t_raw, y_t, marx_data,
   return(all_Z)
 }
 
+#saving the main variables
 
-
+saveRDS(y_t, file = "y_t.rds")
+saveRDS(X_t, file = "X_t.rds")
