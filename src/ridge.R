@@ -385,20 +385,28 @@ F_rmse_df <- do.call(rbind, lapply(seq_along(F_rmse_list), function(i) {
 }))
 
 
-##SANITY CHECK add_pca_factors###
-#i <- 1
-#train_start <- i
-#train_end <- nrow(X_t) - nprev + i - 1
+rmse_df <- do.call(rbind, lapply(names(ridge_results_100), function(model_name) {
+  model <- ridge_results_100[[model_name]]
+  do.call(rbind, lapply(names(model), function(horizon) {
+    data.frame(
+      model = model_name,
+      horizon = horizon,
+      rmse = model[[horizon]]$rmse
+    )
+  }))
+}))
+rownames(rmse_df) <- NULL
 
-# Slice your X aligned to Z (or X_t)
-#X_train_raw <- X_t[train_start:train_end, , drop = FALSE]
-#X_test_raw  <- X_t[train_end + 1, , drop = FALSE]
+# Rank models by RMSE for each horizon (lower = better)
+library(dplyr)
 
-# Now call the PCA function
-#pcs_data <- add_pca_factors(X_train_raw, X_test_raw, n_pcs = 32, n_lags = 4)
+rmse_ranked <- rmse_df %>%
+  group_by(horizon) %>%
+  arrange(rmse, .by_group = TRUE) %>%
+  mutate(rank = row_number()) %>%
+  ungroup()
 
-# Check the results
-#dim(pcs_data$train_pcs)
-dim(pcs_data$test_pcs)
-colnames(pcs_data$train_pcs)
-colnames(pcs_data$test_pcs)
+# Show the ranking
+print(rmse_ranked)
+
+

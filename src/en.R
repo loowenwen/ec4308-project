@@ -261,3 +261,30 @@ for (z_name in names(F_Z_list)) {
 # --- Clean up ---
 stopCluster(cl)
 cat("\nAll Elastic Net forecasts complete. Results saved to", save_path, "\n")
+
+
+
+##rank
+en_df <- do.call(rbind, lapply(names(elasticnet_results_100), function(model_name) {
+  model <- ridge_results_100[[model_name]]
+  do.call(rbind, lapply(names(model), function(horizon) {
+    data.frame(
+      model = model_name,
+      horizon = horizon,
+      rmse = model[[horizon]]$rmse
+    )
+  }))
+}))
+rownames(en_df) <- NULL
+
+# Rank models by RMSE for each horizon (lower = better)
+library(dplyr)
+
+en_ranked <- en_df %>%
+  group_by(horizon) %>%
+  arrange(rmse, .by_group = TRUE) %>%
+  mutate(rank = row_number()) %>%
+  ungroup()
+
+# Show the ranking
+print(en_ranked)
