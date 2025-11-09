@@ -373,6 +373,7 @@ for (h in horizons) {
 
 # ---------- LOOP THROUGH ALL Z'S THAT DOES FACTORS ON STATIONARY X's ----------
 Z_list_to_run <- list(
+  Z_F              = Z_list$Z_F_naked,
   Z_Level_F        = Z_list$Z_F_Level_naked,
   Z_X_MARX_F       = Z_list$Z_F_X_MARX_naked,
   Z_X_MARX_Level_F = Z_list$Z_F_X_MARX_Level_naked
@@ -401,7 +402,9 @@ for (Z_name in names(Z_list_to_run)) {
   
   # run across all horizons
   for (h in horizons) {
+    cat("\nStarting", h, "month(s) ahead forecast at", format(Sys.time(), "%H:%M:%S"), "\n")
     cat("\n--- Horizon", h, "months ahead ---\n")
+    
     
     rf_results <- rf_rolling_window_pca(
       Z_naked = Z_naked,
@@ -417,6 +420,7 @@ for (Z_name in names(Z_list_to_run)) {
     saveRDS(rf_results, save_path)
     
     cat("Saved results to:", save_path, "\n")
+    cat("\nCompleted", h, "month(s) ahead forecast at", format(Sys.time(), "%H:%M:%S"), "\n")
   }
 }
 
@@ -428,13 +432,13 @@ cpi_target_full <- read_csv("../data/cpi_target_full.csv")
 y <- cpi_target_full[, -2]  # assuming column 2 is dropped
 
 Z_list_to_run <- list(
-  # Z_X        = Z_list$Z_X, 
-  Z_Ht       = Z_list$Z_Ht, 
-  Z_X_MARX   = Z_list$Z_X_MARX
+  Z_X        = Z_list$Z_X
+  # Z_Ht       = Z_list$Z_Ht, 
+  # Z_X_MARX   = Z_list$Z_X_MARX
 )
 
 # loop settings
-horizons <- c(1, 3, 6, 12)
+horizons <- c(6, 12)
 set.seed(4308)
 
 # main loop
