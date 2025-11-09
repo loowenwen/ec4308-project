@@ -116,10 +116,10 @@ arima.rmse12 = arima12c$errors[1]
 ### Save results to .rds
 ```{r}
 results_list <- list(
-  h1  = list(pred = arima1c$pred,  errors = arima1c$errors),
-  h3  = list(pred = arima3c$pred,  errors = arima3c$errors),
-  h6  = list(pred = arima6c$pred,  errors = arima6c$errors),
-  h12 = list(pred = arima12c$pred, errors = arima12c$errors)
+  h1  = list(pred = arima1c$pred,  rmse = arima1c$errors[1], mae = arima1c$errors[2]),
+  h3  = list(pred = arima3c$pred,  rmse = arima3c$errors[1], mae = arima3c$errors[2]),
+  h6  = list(pred = arima6c$pred,  rmse = arima6c$errors[1], mae = arima6c$errors[2]),
+  h12 = list(pred = arima12c$pred, rmse = arima12c$errors[1], mae = arima12c$errors[2])
 )
 
 #Save results to rds
