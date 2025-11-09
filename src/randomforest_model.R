@@ -374,9 +374,15 @@ for (h in horizons) {
 
 # ---------- LOOP THROUGH ALL Z'S THAT DOES FACTORS ON STATIONARY X's ----------
 Z_list_to_run <- list(
+<<<<<<< HEAD
   #Z_F              = Z_list$Z_F_naked,
   #Z_Level_F        = Z_list$Z_F_Level_naked,
   #Z_X_MARX_F       = Z_list$Z_F_X_MARX_naked,
+=======
+  Z_F              = Z_list$Z_F_naked,
+  Z_Level_F        = Z_list$Z_F_Level_naked,
+  Z_X_MARX_F       = Z_list$Z_F_X_MARX_naked,
+>>>>>>> d9e94dd6575ec0ef6da3b5c66a6263cba2bd42d5
   Z_X_MARX_Level_F = Z_list$Z_F_X_MARX_Level_naked
 )
 
@@ -433,6 +439,7 @@ cpi_target_full <- read_csv("../data/cpi_target_full.csv")
 y <- cpi_target_full[, -2]  # assuming column 2 is dropped
 
 Z_list_to_run <- list(
+<<<<<<< HEAD
   Z_X        = Z_list$Z_X,
   Z_X_MARX   = Z_list$Z_X_MARX,
   Z_Ht       = Z_list$Z_Ht
@@ -440,6 +447,15 @@ Z_list_to_run <- list(
 
 # loop settings
 horizons <- c(3, 6, 12)
+=======
+  Z_X        = Z_list$Z_X
+  # Z_Ht       = Z_list$Z_Ht, 
+  # Z_X_MARX   = Z_list$Z_X_MARX
+)
+
+# loop settings
+horizons <- c(6, 12)
+>>>>>>> d9e94dd6575ec0ef6da3b5c66a6263cba2bd42d5
 set.seed(4308)
 
 # main loop
