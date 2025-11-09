@@ -5,7 +5,6 @@ library(irlba)
 library(foreach)
 library(doParallel)
 
-elasticnet_results_100$Z_F_X_MARX_Level_naked <- elasticnet2_results_100$Z_F_X_MARX_Level_naked
 
 # ---------------- 1. PCA helper function ----------------
 add_pca_factors <- function(X_train, X_test, n_pcs = 32, n_lags = 1) {
