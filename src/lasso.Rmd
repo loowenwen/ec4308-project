@@ -18,6 +18,8 @@ library(doParallel) #for parallel core running
 library(foreach)
 library(irlba)
 library(HDeconometrics)
+library(tidyr)
+library(ggplot2)
 ```
 
 ```{r reading in environment variables}
@@ -33,7 +35,7 @@ X_t
 
 ```{r lasso plug-in non-F}
 horizons <- c(1,3,6,12)
-save_path <- "rlasso_results_100.rds"
+save_path <- "rlasso_results.rds"
 
 # Load previous progress if available
 if (file.exists(save_path)) {
@@ -117,7 +119,8 @@ for (z_name in names(Z_list)) {
 
     results[[z_name]][[paste0("h", h)]] <- list(
       pred = preds,
-      errors = c(rmse = rmse, mae = mae)
+      rmse = rmse, 
+      mae = mae
     )
 
     cat("    Horizon", h, "done. RMSE:", round(rmse, 4), "MAE:", round(mae, 4), "\n")
@@ -137,9 +140,10 @@ for (z_name in names(results)) {
   cat("Results for:", z_name, "\n")
   for (h in horizons) {
     if (!is.null(results[[z_name]][[paste0("h", h)]])) {
-      error_vec <- results[[z_name]][[paste0("h", h)]]$errors
-      cat("  Horizon", h, ": RMSE =", round(error_vec["rmse"], 4), 
-          ", MAE =", round(error_vec["mae"], 4), "\n")
+      rmse <- results[[z_name]][[paste0("h", h)]]$rmse
+      mae <- results[[z_name]][[paste0("h", h)]]$mae
+      cat("  Horizon", h, ": RMSE =", round(rmse, 4), 
+          ", MAE =", round(mae, 4), "\n")
     } else {
       cat("  Horizon", h, ": not yet computed\n")
     }
@@ -179,7 +183,7 @@ mse_ranked <- mse_summary %>%
 ```
 
 
-```{r lasso plug in F matrices nprev=100, no X}
+```{r lasso plug in F matrices nprev=100, add X for pc0s}
 # --- Helper function: compute PCs and add lags ---
 add_pca_factors <- function(X_train, X_test, n_pcs = 32, n_lags = 1) {
   # Train PCA basis on training X
@@ -213,7 +217,7 @@ add_pca_factors <- function(X_train, X_test, n_pcs = 32, n_lags = 1) {
 # --- Main rolling window loop ---
 n_pcs <- 32
 n_lags <- 4
-save_path <- "rlasso_results_100.rds"
+save_path <- "rlasso_results.rds"
 
 if (file.exists(save_path)) {
   results <- readRDS(save_path)
@@ -282,7 +286,7 @@ for (z_name in names(Z_list)) {
     rmse <- sqrt(mean((real - preds)^2))
     mae <- mean(abs(real - preds))
     
-    results[[z_name]][[hname]] <- list(pred = preds, errors = c(rmse = rmse, mae = mae))
+    results[[z_name]][[hname]] <- list(pred = preds, rmse = rmse, mae = mae)
     cat("    Horizon", h, "done. RMSE:", rmse, "MAE:", mae, "\n")
     saveRDS(results, save_path)
   }
@@ -292,7 +296,10 @@ for (z_name in names(Z_list)) {
 
 stopCluster(cl)
 
+
 ```
+
+
 ```{r lasso bic no factors}
 alpha <- 1
 IC <- "bic"
@@ -522,5 +529,72 @@ for (z_name in names(results)) {
         "| MAE =", round(err$mae, 4), "\n")
   }
 }
+```
+
+```{r plots of results}
+
+#read results
+res_plugin_lasso <- readRDS("rlasso_results.rds")
+res_bic_lasso    <- readRDS("lasso_bic_results_100_icglm.rds")
+
+# comparison table
+results_to_df <- function(res_list, method_name) {
+  df <- lapply(names(res_list), function(z_name) {
+    lapply(names(res_list[[z_name]]), function(h) {
+      tibble(
+        Z = z_name,
+        Horizon = h,
+        RMSE = res_list[[z_name]][[h]]$rmse,
+        MAE  = res_list[[z_name]][[h]]$mae
+      )
+    }) |> bind_rows()
+  }) |> bind_rows()
+  df$Method <- method_name
+  df
+}
+
+df_plugin <- results_to_df(res_plugin_lasso, "Plug-in Lasso")
+df_bic    <- results_to_df(res_bic_lasso, "BIC Lasso")
+
+comparison_df <- bind_rows(df_plugin, df_bic) %>%
+  pivot_wider(names_from = Method, values_from = c(RMSE, MAE))
+
+print(comparison_df)
+
+
+
+# plot forecasts against actual per method, each Z a different colour
+plot_forecasts <- function(res_list, y_vec, method_name) {
+  df <- lapply(names(res_list), function(z_name) {
+    lapply(names(res_list[[z_name]]), function(h) {
+      n <- length(res_list[[z_name]][[h]]$pred)
+      tibble(
+        Time = seq_len(n),
+        Forecast = res_list[[z_name]][[h]]$pred,
+        Actual   = tail(y_vec, n),
+        Z = z_name,
+        Horizon = h
+      )
+    }) |> bind_rows()
+  }) |> bind_rows()
+  
+  ggplot(df, aes(x = Time)) +
+    geom_line(aes(y = Forecast, color = Z)) +
+    geom_line(aes(y = Actual), color = "black", linetype = "dashed", size = 0.8) +
+    facet_wrap(~ Horizon, scales = "free_y") +
+    labs(title = paste("Forecast vs Actual —", method_name),
+         y = "Value", x = "Time") +
+    theme_minimal()
+}
+
+# Example usage
+plot_forecasts(res_plugin_lasso, y_t$CPI_t, "Plug-in Lasso")
+plot_forecasts(res_bic_lasso, y_t$CPI_t, "BIC Lasso")
+
+
+
+
+
+#
 ```
 
