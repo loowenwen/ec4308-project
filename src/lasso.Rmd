@@ -183,7 +183,7 @@ mse_ranked <- mse_summary %>%
 ```
 
 
-```{r lasso plug in F matrices nprev=100, add X for pc0s}
+```{r lasso plug in F matrices nprev=100, add X for pcs}
 # --- Helper function: compute PCs and add lags ---
 add_pca_factors <- function(X_train, X_test, n_pcs = 32, n_lags = 1) {
   # Train PCA basis on training X
