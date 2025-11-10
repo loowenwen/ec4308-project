@@ -198,6 +198,7 @@ simple_avg <- map_dfr(horizon_steps, function(h) {
   
   tibble(
     horizon = h,
+    pred = list(preds),
     RMSE = rmse(actuals_aligned, preds),
     MAE = mae(actuals_aligned, preds)
   )
@@ -294,6 +295,7 @@ gr_eval <- map_dfr(horizon_steps, function(h) {
   
   tibble(
     horizon = h,
+    pred = list(preds),
     RMSE = rmse(actuals_aligned, preds),
     MAE  = mae(actuals_aligned, preds)
   )
@@ -302,6 +304,79 @@ gr_eval <- map_dfr(horizon_steps, function(h) {
 gr_eval
 ```
 
+
+```{r gr with intercept}
+# store results
+grc_forecasts <- list()
+grc_weights   <- list()
+
+# Loop through horizons
+for(h in horizon_steps){
+  
+  # Extract numeric vectors for all models for this horizon
+  X <- ensemble_df %>%
+    filter(as.character(horizon) == paste0("h",h)) %>% 
+    select(arima, plugin_lasso, bic_lasso, ridge, elasticnet, boosting, rf) %>% 
+    unlist(recursive = FALSE) %>%    # list of 7 numeric vectors
+    do.call(cbind, .)               # form matrix: n x m (n=100 preds, m=7 models)
+  
+  # Add a column of 1s for constant
+  X <- cbind(const = 1, X)
+  
+  # Dependent variable (actuals) aligned with horizon
+  y_h <- dplyr::lead(y_h_real, h)  # shift by horizon steps
+  
+  # Keep only rows where y_h is not NA
+  valid_rows <- which(!is.na(y_h))
+  y_h <- y_h[valid_rows]
+  X   <- X[valid_rows, , drop = FALSE]
+  
+  # Constraints: sum(beta excluding constant) = 1, beta >= 0 for models, constant unconstrained
+  n_models <- ncol(X) - 1
+  c_mat <- matrix(c(0, rep(1, n_models)), nrow = 1)  # sum of model weights = 1
+  d_vec <- 1
+  e_mat <- diag(ncol(X))
+  e_mat[1,1] <- 0        # allow constant to be negative/unconstrained
+  f_vec <- rep(0, ncol(X))
+  
+  # Solve for GR weights with constant
+  gr_sol <- lsei(X, y_h, c = c_mat, d = d_vec, e = e_mat, f = f_vec)
+  
+  beta <- gr_sol   # weights
+  
+  # Compute GR forecast
+  gr_forecast <- X %*% beta
+  
+  # Save
+  grc_forecasts[[paste0("h", h)]] <- gr_forecast
+  grc_weights[[paste0("h", h)]]   <- beta
+}
+
+# Combine GRC forecasts into a tibble
+grc_forecast_df <- bind_rows(
+  lapply(names(grc_forecasts), function(h) {
+    preds <- grc_forecasts[[h]]
+    if(length(preds) < nprev) {
+      preds <- c(preds, rep(NA, nprev - length(preds)))
+    }
+    tibble(
+      horizon = h,
+      grc_pred = preds
+    )
+  })
+)
+
+# GRC weights per horizon
+grc_weights_df <- tibble(
+  horizon = names(grc_weights),
+  weights = I(grc_weights)
+)
+
+grc_forecast_df
+grc_weights_df
+```
+
+
 ```{r compare ensemble results to other models}
 # Add simple average results
 simple_avg_df <- simple_avg %>%
@@ -309,8 +384,7 @@ simple_avg_df <- simple_avg %>%
     model = "simple_avg",
     Z = "all",
     horizon = paste0("h", horizon)
-  ) %>%
-  select(model, horizon, Z, rmse = RMSE, mae = MAE)
+  ) 
 
 # Add GR ensemble results
 gr_eval_df <- gr_eval %>%
@@ -318,20 +392,62 @@ gr_eval_df <- gr_eval %>%
     model = "gr_ensemble",
     Z = "all",
     horizon = paste0("h", horizon)
-  ) %>%
-  select(model, horizon, Z, rmse = RMSE, mae = MAE)
+  ) 
 
+##COMPARE BASED ON ERRORS
 # Combine with best_models_df
-combined_results <- bind_rows(best_models_df, simple_avg_df, gr_eval_df) %>%
+combined_results <- bind_rows(best_models_df, simple_avg_df %>%
+  select(model, horizon, Z, rmse = RMSE, mae = MAE), gr_eval_df%>%
+  select(model, horizon, Z, rmse = RMSE, mae = MAE)) %>%
   group_by(horizon) %>%
   arrange(rmse, .by_group = TRUE) %>%
   ungroup()
 
 saveRDS(combined_results, "all_best_models_rmse.rds")
+
 ```
 
 
-```{r gr with intercept}
+```{r ALL BEST MODELS PREDS}
+# helper fn
+add_model_to_best_models_all <- function(best_models_all, model_name, metric_df) {
+  # Ensure horizon names match existing pattern
+  h_names <- metric_df$horizon
+  
+  # Construct nested list per horizon
+  best_models_all[[model_name]] <- setNames(
+    lapply(seq_along(h_names), function(i) {
+      list(
+        Z    = "all",
+        pred = metric_df$pred[[i]],
+        rmse = metric_df$RMSE[i],
+        mae  = metric_df$MAE[i]
+      )
+    }),
+    h_names
+  )
+  
+  return(best_models_all)
+}
+
+
+# Add simple average
+best_models_all <- add_model_to_best_models_all(
+  best_models_all,
+  "simple_avg",
+  simple_avg_df
+)
+
+# Add GR ensemble
+best_models_all <- add_model_to_best_models_all(
+  best_models_all,
+  "gr_ensemble",
+  gr_eval_df
+)
+
+# Check
+str(best_models_all[c("simple_avg","gr_ensemble")])
+
 
 ```
 
