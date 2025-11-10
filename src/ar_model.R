@@ -1,5 +1,6 @@
 # load libraries
 library(forecast)
+library(tidyverse)
 library(tseries)
 library(ggplot2)
 
@@ -35,7 +36,7 @@ colnames(lag_matrix) <- paste0("lag", seq_len(max_lag))
 
 # split train/test
 # last 66 months as test set, specifically from Jan 2020 onwards
-nprev <- 66 
+nprev <- 100
 total_rows <- nrow(lagged)
 test_rows <- seq(total_rows - nprev + 1, total_rows)
 train_rows <- seq_len(total_rows - nprev)
@@ -257,7 +258,7 @@ ggplot(plot_df_long, aes(x = Index, y = Value, color = Type)) +
 
 # --------- LOOP ACROSS FORECASTS HORIZONS ---------
 # set parameters
-nprev <- 66
+nprev <- 100
 forecast_horizons <- c(1, 3, 6, 12)
 lags <- 1:12
 
