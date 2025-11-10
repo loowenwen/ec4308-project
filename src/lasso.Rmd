@@ -436,82 +436,48 @@ Z_list <- lapply(Z_list, function(df) {
 
 # --- Main Loop ---
 for (z_name in names(Z_list)) {
-  
   Z_full <- Z_list[[z_name]]
   Z <- Z_full %>% select(-sasdate)
-  y_vec <- tail(y_t$CPI_t, nrow(Z))
-  X_aligned <- tail(X_t, nrow(Z))
-  
+  y_vec <- tail(y_t$CPI_t, nrow(Z))  # align y
   cat("\n=============================\nRunning:", z_name, "\n")
   results[[z_name]] <- list()
   
   for (h in horizons) {
+    hname <- paste0("h", h)
     cat("  Horizon:", h, "\n")
     
+    # Lead actuals by horizon
     y_target <- dplyr::lead(y_vec, h)[1:(nrow(Z) - h)]
-    Z_trim   <- Z[1:(nrow(Z) - h), ]
-    X_trim   <- X_aligned[1:(nrow(X_aligned) - h), ]
+    Z_trim   <- Z[1:(nrow(Z) - h), , drop = FALSE]
     
-    window_size <- nrow(Z_trim) - nprev
+    # Rolling window: exactly nprev predictions
+    pred_out <- foreach(i = seq_len(nprev), .combine = "c", .packages = c("hdm", "HDeconometrics")) %dopar% {
+      train_start <- i
+      train_end   <- length(y_target) - nprev + i - 1
+      
+      Z_train <- as.matrix(Z_trim[train_start:train_end, ])
+      y_train <- y_target[train_start:train_end]
+      Z_test  <- as.matrix(Z_trim[train_end + 1, ])
+      
+      if (sd(y_train) == 0 || all(is.na(y_train))) return(NA)
+      
+      model <- ic.glmnet(x = Z_train, y = y_train, alpha = alpha, crit = IC)
+      as.numeric(predict(model, Z_test))
+    }
     
-    pred_out <- foreach(i = seq_len(nprev), .combine = "c",
-                        .packages = c("hdm", "HDeconometrics", "dplyr")) %dopar% {
-                          
-                          train_start <- i
-                          train_end   <- i + window_size - 1
-                          
-                          # --- Split windows ---
-                          Z_train_raw <- as.matrix(Z_trim[train_start:train_end, ])
-                          Z_test_raw  <- as.matrix(Z_trim[train_end + 1, ])
-                          X_train_raw <- as.matrix(X_trim[train_start:train_end, ])
-                          X_test_raw  <- as.matrix(X_trim[train_end + 1, ])
-                          y_train <- y_target[train_start:train_end]
-                          
-                          if (sd(y_train) == 0 || all(is.na(y_train))) {
-                            return(NA)
-                          }
-                          
-                          # --- Add PCA factors (same as old version) ---
-                          pcs_data <- add_pca_factors(
-                            X_train = X_train_raw,
-                            X_test  = X_test_raw,
-                            n_pcs   = n_pcs,
-                            n_lags  = n_lags
-                          )
-                          
-                          Z_train <- cbind(Z_train_raw, pcs_data$train_pcs)
-                          Z_test  <- cbind(Z_test_raw, pcs_data$test_pcs)
-                          
-                          # drop rows with any NA in training set, align y_train accordingly
-                          na_rows <- apply(Z_train, 1, function(x) any(is.na(x)))
-                          Z_train <- Z_train[!na_rows, , drop = FALSE]
-                          y_train <- y_train[!na_rows]
-                          
-                          # --- Run ic.glmnet with information criterion ---
-                          model <- ic.glmnet(
-                            x = Z_train,
-                            y = y_train,
-                            alpha = alpha,
-                            crit = IC
-                          )
-                          
-                          # --- Predict next obs ---
-                          as.numeric(predict(model, newx = Z_test))
-                        }
-    
-    # --- Store results ---
+    # Compute RMSE/MAE
     true_y <- tail(y_target, nprev)
-    results[[z_name]][[paste0("h", h)]] <- list(
+    rmse <- sqrt(mean((true_y - pred_out)^2, na.rm = TRUE))
+    mae  <- mean(abs(true_y - pred_out), na.rm = TRUE)
+    
+    results[[z_name]][[hname]] <- list(
       pred = pred_out,
-      rmse = sqrt(mean((true_y - pred_out)^2, na.rm = TRUE)),
-      mae  = mean(abs(true_y - pred_out), na.rm = TRUE)
+      rmse = rmse,
+      mae = mae
     )
     
-    cat("    Horizon", h, "done.\n")
-    cat("    RMSE:", round(results[[z_name]][[paste0('h', h)]]$rmse, 4),
-        "| MAE:", round(results[[z_name]][[paste0('h', h)]]$mae, 4), "\n")
+    cat("    Horizon", h, "done. RMSE:", round(rmse, 4), "MAE:", round(mae, 4), "\n")
     saveRDS(results, save_path)
-    cat("  Progress saved to", save_path, "\n")
   }
 }
 
@@ -530,7 +496,8 @@ for (z_name in names(results)) {
 }
 ```
 
-```{r plots of results}
+
+```{r table of results}
 
 #read results
 res_plugin_lasso <- readRDS("rlasso_results.rds")
@@ -559,41 +526,99 @@ comparison_df <- bind_rows(df_plugin, df_bic) %>%
   pivot_wider(names_from = Method, values_from = c(RMSE, MAE))
 
 print(comparison_df)
+```
 
 
-
+```{r plot forecasts vs actual}
 # plot forecasts against actual per method, each Z a different colour
-plot_forecasts <- function(res_list, y_vec, method_name) {
+plot_forecasts <- function(res_list, y_df, method_name) {
+  y_vec <- y_df$CPI_t
+  dates <- y_df$sasdate
+  
   df <- lapply(names(res_list), function(z_name) {
     lapply(names(res_list[[z_name]]), function(h) {
+      h_num <- as.numeric(gsub("h", "", h))
       n <- length(res_list[[z_name]][[h]]$pred)
+      
       tibble(
-        Time = seq_len(n),
+        Date = tail(dplyr::lead(dates, h_num), n),
         Forecast = res_list[[z_name]][[h]]$pred,
-        Actual   = tail(y_vec, n),
+        Actual   = tail(dplyr::lead(y_vec, h_num), n),
         Z = z_name,
-        Horizon = h
+        Horizon = paste0("h", h_num)
       )
     }) |> bind_rows()
   }) |> bind_rows()
   
-  ggplot(df, aes(x = Time)) +
+  ggplot(df, aes(x = Date)) +
+    geom_line(aes(y = Actual), color = "black", alpha = 0.5) +
     geom_line(aes(y = Forecast, color = Z)) +
-    geom_line(aes(y = Actual), color = "black", linetype = "dashed", size = 0.8) +
+    scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
     facet_wrap(~ Horizon, scales = "free_y") +
     labs(title = paste("Forecast vs Actual —", method_name),
-         y = "Value", x = "Time") +
+         y = "Value", x = "Year") +
+    theme_minimal() +
+    theme(legend.position = "bottom",
+          axis.text.x = element_text(angle = 45, hjust = 1))
+}
+
+
+# Example usage
+plot_forecasts(res_plugin_lasso, y_t, "Plug-in Lasso")
+plot_forecasts(res_bic_lasso, y_t, "BIC Lasso")
+
+
+```
+
+```{r plot of rmses}
+
+plot_rmses <- function(res_list, method_name) {
+  df <- lapply(names(res_list), function(z_name) {
+    lapply(names(res_list[[z_name]]), function(h) {
+      tibble(
+        Z = z_name,
+        Horizon = h,
+        RMSE = res_list[[z_name]][[h]]$rmse
+      )
+    }) |> bind_rows()
+  }) |> bind_rows()
+  
+  ggplot(df, aes(x = Horizon, y = RMSE, color = Z, group = Z)) +
+    geom_line() +
+    geom_point() +
+    labs(title = paste("RMSE across horizons —", method_name),
+         x = "Horizon", y = "RMSE") +
     theme_minimal()
 }
 
-# Example usage
-plot_forecasts(res_plugin_lasso, y_t$CPI_t, "Plug-in Lasso")
-plot_forecasts(res_bic_lasso, y_t$CPI_t, "BIC Lasso")
+plot_rmses(res_plugin_lasso, "Plug-in Lasso")
+plot_rmses(res_bic_lasso, "BIC Lasso")
 
+```
+```{r lasso bests}
+get_best_models <- function(res_list) {
+  horizons <- names(res_list[[1]])  # assume all have same horizons
+  
+  best_list <- lapply(horizons, function(h) {
+    # get all rmse values for this horizon across Zs
+    all_rmse <- sapply(res_list, function(z) z[[h]]$rmse)
+    best_z <- names(which.min(all_rmse))
+    best_model <- res_list[[best_z]][[h]]
+    
+    list(
+      Z = best_z,
+      pred = best_model$pred,
+      rmse = best_model$rmse,
+      mae = best_model$mae
+    )
+  })
+  
+  names(best_list) <- horizons
+  return(best_list)
+}
 
-
-
-
-#
+# Example usage:
+lasso_plugin_best <- get_best_models(res_plugin_lasso)
+lasso_bic_best <- get_best_models(res_bic_lasso)
 ```
 
