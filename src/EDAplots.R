@@ -171,3 +171,19 @@ ggplot(melted_corr, aes(x = Var1, y = Var2, fill = value)) +
   coord_fixed()
 
 ggsave("highlycorrelated_predictors_heatmap.png", width = 20, height = 10, dpi = 500, bg = "white")
+
+
+
+#######SCREE plots (decide the pc number)############
+set.seed("1234")
+pca <- prcomp(X_t, center = TRUE, scale. = TRUE)
+var_explained <- pca$sdev^2 / sum(pca$sdev^2)
+cum_var_explained <- cumsum(var_explained)
+variance_table <- data.frame(
+  PC = paste0("PC", 1:length(var_explained)),
+  Variance_Explained = var_explained,
+  Cumulative_Variance = cum_var_explained
+)
+
+print(variance_table)
+
