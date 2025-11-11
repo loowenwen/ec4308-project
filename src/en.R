@@ -1,17 +1,10 @@
-#en_results_100_sep <- lapply(elasticnet_results_100, function(model) {
- # lapply(model, function(horizon) {
-   # list(
-     # pred = horizon$pred,
-     # rmse = horizon$errors["rmse"],
-     # mae  = horizon$errors["mae"]
-   # ) }) })
-#saveRDS(en_results_100_sep, "elasticnet_results_100.rds")
-
 library(glmnet)
 library(dplyr)
 library(irlba)
 library(foreach)
 library(doParallel)
+library(ggplot2)
+library(tidyr)
 
 
 # ---------------- 1. PCA helper function ----------------
@@ -277,14 +270,4 @@ en_df <- do.call(rbind, lapply(names(elasticnet_results_100), function(model_nam
 }))
 rownames(en_df) <- NULL
 
-# Rank models by RMSE for each horizon (lower = better)
-library(dplyr)
 
-en_ranked <- en_df %>%
-  group_by(horizon) %>%
-  arrange(rmse, .by_group = TRUE) %>%
-  mutate(rank = row_number()) %>%
-  ungroup()
-
-# Show the ranking
-print(en_ranked)
