@@ -274,3 +274,5 @@ write_csv(X_test, "../data/fred_test.csv")
 write_csv(y_train, "../data/y_train.csv")
 write_csv(y_test, "../data/y_test.csv")
 
+
+
