@@ -12,6 +12,9 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r load libraries}
 library(tidyverse)
 library(lsei)
+library(ggplot2)
+library(purrr)
+library(RColorBrewer)
 ```
 
 ```{r read in files}
@@ -922,11 +925,117 @@ best_models_all <- add_model_to_best_models_all(
 # Save
 saveRDS(best_models_all, "all_best_models_preds.rds")
 
+rw_model <- list(
+  h1 = list(Z = "yt-1", pred = rw1c, rmse = rw.rmse1, mae = NULL),
+  h3 = list(Z = "yt-1", pred = rw3c, rmse = rw.rmse3, mae = NULL),
+  h6 = list(Z = "yt-1", pred = rw6c, rmse = rw.rmse6, mae = NULL),
+  h12 = list(Z = "yt-1", pred = rw12c, rmse = rw.rmse12, mae = NULL)
+)
+
+# Add to your tibble
+best_models_all$randomwalk <- rw_model
 
 ```
 
 
 ```{r plots??}
+plot_forecast_horizon <- function(y_real, preds_list, horizon) {
+  
+  nprev <- length(y_real)
+  start_oos <- as.Date("2017-03-01")
+  oos_dates <- seq.Date(from = start_oos, by = "month", length.out = nprev)
+  
+  # Lead actuals by horizon
+  actuals_shifted <- dplyr::lead(y_real, horizon)
+  
+  df_list <- imap(preds_list, function(model_obj, model_name) {
+    preds <- model_obj[[paste0("h", horizon)]]$pred
+    
+    tibble(
+      date = oos_dates + months(horizon),
+      actual = actuals_shifted,
+      forecast = preds,
+      model = model_name
+    )
+  }) %>%
+    bind_rows() %>%
+    pivot_longer(cols = c(actual, forecast), names_to = "type", values_to = "value")
+  
+  num_models <- length(preds_list)
+  colors_for_models <- brewer.pal(min(num_models, 8), "Dark2")  # Dark2 has 8 distinguishable colors
+  if (num_models > 8) colors_for_models <- rep(colors_for_models, length.out = num_models)
+  
+  ggplot(df_list, aes(x = date, y = value)) +
+    geom_line(
+      data = subset(df_list, type == "actual"),
+      aes(group = 1),
+      color = "black",
+      alpha = 0.7,
+      linewidth = 0.8
+    ) +
+    geom_line(
+      data = subset(df_list, type == "forecast"),
+      aes(color = model),
+      linewidth = 0.8,
+      alpha = 0.7
+    ) +
+    scale_color_manual(values = colors_for_models) +
+    theme_minimal(base_size = 13) +
+    labs(
+      title = paste0("Forecasts vs Actuals (horizon = ", horizon, ")"),
+      x = "Date",
+      y = "CPI_t (Inflation)",
+      color = "Model"
+    ) +
+    coord_cartesian(xlim = c(start_oos, max(oos_dates)))
+}
+
+
+
+
+#horizon 1
+plot_forecast_horizon(
+  y_real = y_h_real,
+  preds_list = list(
+    ridge = best_models_all$ridge,
+    grunrc_ensemble = best_models_all$grunrc_ensemble,
+    randomwalk = best_models_all$randomwalk
+  ),
+  horizon = 1
+)
+
+#horizon 3
+plot_forecast_horizon(
+  y_real = y_h_real,
+  preds_list = list(
+    ridge = best_models_all$ridge,
+    bic_lasso = best_models_all$bic_lasso,
+    randomwalk = best_models_all$randomwalk
+  ),
+  horizon = 3
+)
+
+#horizon 6
+plot_forecast_horizon(
+  y_real = y_h_real,
+  preds_list = list(
+    bic_lasso = best_models_all$bic_lasso,
+    grunrc_ensemble = best_models_all$grunrc_ensemble,
+    randomwalk = best_models_all$randomwalk
+  ),
+  horizon = 6
+)
+
+#horizon 12
+plot_forecast_horizon(
+  y_real = y_h_real,
+  preds_list = list(
+    bic_lasso = best_models_all$bic_lasso,
+    elasticnet = best_models_all$elasticnet,
+    randomwalk = best_models_all$randomwalk
+  ),
+  horizon = 12
+)
 
 ```
 
