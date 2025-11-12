@@ -59,7 +59,7 @@ ggplot(cpi_df, aes(x = sasdate, y = CPI_t)) +
   ) +
   
   labs(
-    title = "U.S. Monthly Inflation Rate (Jan 1960-June 2025)",
+    title = "U.S. Monthly Inflation Rate (1961-June 2025)",
     subtitle = "Target Variable: 100 × Δlog(CPIAUCSL)",
     x = NULL,
     y = NULL
@@ -223,27 +223,35 @@ library(scales)
 
 
 #######SCREE plots (decide the pc number)############
-set.seed("1234")
-pca <- prcomp(X_full, center = TRUE, scale. = TRUE) 
-var_explained <- pca$sdev^2 / sum(pca$sdev^2) 
-cum_var_explained <- cumsum(var_explained) 
-variance_table <- data.frame( PC = paste0("PC", 1:length(var_explained)), Variance_Explained = var_explained, Cumulative_Variance = cum_var_explained ) 
+set.seed(1234)
+pca <- prcomp(X_full, center = TRUE, scale. = TRUE)
+
+var_explained <- pca$sdev^2 / sum(pca$sdev^2)
+cum_var_explained <- cumsum(var_explained)
+variance_table <- data.frame(
+  PC = paste0("PC", 1:length(var_explained)),
+  Variance_Explained = var_explained,
+  Cumulative_Variance = cum_var_explained
+)
 print(variance_table)
 
-png("../figures/scree_plot_simple.png",   # change path if you like
-    width = 1000, height = 600, res = 140)
+# Save plot
+png("../figures/scree_plot_simple.png", width = 1000, height = 600, res = 140)
 
-plot(pca, type = "l", main = "Scree Plot of PCA Factors (On Stationary Xs)", npcs = 125)
-abline(v = 32, col = "blue", lty = 2, lwd = 2)
-text(x = 32 + 2, y = max(pca$sdev^2) * 0.8,
-     labels = "PC32 (80% Cumulative Variance)", col = "blue", font = 0.4, adj = c(0, 0.5), cex = 1.2)
+# Use base plotting instead of plot.prcomp to control axes/labels
+n_pcs <- length(var_explained)
+plot(1:n_pcs, var_explained, type = "b",
+     main = "Scree Plot of PCA Factors (On Stationary Xs)",
+     xlab = "Principal Component Number",
+     ylab = "Variance Explained")
+abline(v = 32, col = "darkblue", lty = 2, lwd = 1.5)
+text(x = 32 + 2, y = max(var_explained) * 0.8,
+     labels = "PC32 (80% Cumulative Variance)",
+     col = "darkblue", font = 0.1, adj = c(0, 0.5), cex = 1.1)
+
 dev.off()
 
-# Add 80% cumulative line
-cum_var <- cumsum(pca$sdev^2) / sum(pca$sdev^2)
-pc80 <- which(cum_var >= 0.8)[1]
-abline(v = pc80, col = "purple", lty = 2)
-text(pc80, max(pca$sdev^2)*0.8, paste("PC", pc80, "\n≥80%"), col = "purple", adj = c(-0.2, 1))
+
 
 
 
