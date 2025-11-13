@@ -196,84 +196,20 @@ message("✅ Static feature engineering complete. Ready for rolling PCA.")
   # Add lags including original factors
   lagged_factors <- create_lags(F_train[, -1, drop = FALSE], max_lags, dates_full[1:train_end_idx])
   return(lagged_factors)
-}
 
 
-#rolling build Z matrice
-#rolling_Z_builder <- function(X_t, X_t_raw, y_t, marx_data, 
-                              #dates_Xt, dates_Xtraw,
-                              #Z_names = c("Z_F_stationary", "Z_F_raw",
-    #                                      "Z_X", "Z_X_MARX",
-     #                                     "Z_Fstationary_X_MARX_","Z_Fraw_X_MARX_"),
-                             # train_window = 100, max_lags = 4, var_threshold = 0.8, min_train = 50) {
-  
-# n <- nrow(X_t)
- # all_Z <- vector("list", n - train_window) # store Z matrices for each forecast date
-#  names(all_Z) <- paste0("t+", 1:(n - train_window))
+
+
   
   # Helper: align by date
- # align_by_date <- function(...) {
+ #align_by_date <- function(...) {
     dfs <- list(...)
     min_rows <- min(sapply(dfs, nrow))
     dfs_trimmed <- lapply(dfs, function(x) x[(nrow(x)-min_rows+1):nrow(x), , drop=FALSE])
     Reduce(function(x,y) cbind(x, y[ , setdiff(names(y), "sasdate")]), dfs_trimmed)
   }
   
-  #for (t_idx in (train_window + 1):n) {
-    train_start <- t_idx - train_window
-    train_end <- t_idx - 1
-    
-    # Subset training window
-    X_train <- X_t[train_start:train_end, , drop = FALSE]
-    X_raw_train <- X_t_raw[train_start:train_end, , drop = FALSE]
-    y_train <- y_t[train_start:train_end, , drop = FALSE]
-    marx_train <- marx_data[train_start:train_end, , drop = FALSE]
-    dates_train_Xt <- dates_Xt[train_start:train_end]
-    dates_train_Xtraw <- dates_Xtraw[train_start:train_end]
-    
-    Z_step <- list()
-    
-    for (Z_name in Z_names) {
-      if (Z_name == "Z_F_stationary") {
-        F_lags <- rolling_pca_lags(X_train, dates_train_Xt, nrow(X_train), max_lags, var_threshold, min_train)
-        Z_step[[Z_name]] <- align_by_date(F_lags, y_lags = create_lags(y_train %>% select(-sasdate), max_lags, dates_train_Xt))
-        
-      } else if (Z_name == "Z_F_raw") {
-        F_lags <- rolling_pca_lags(X_raw_train, dates_train_Xtraw, nrow(X_raw_train), max_lags, var_threshold, min_train)
-        Z_step[[Z_name]] <- align_by_date(F_lags, y_lags = create_lags(y_train %>% select(-sasdate), max_lags, dates_train_Xtraw))
-        
-      } else if (Z_name == "Z_X") {
-        Z_step[[Z_name]] <- align_by_date(create_lags(X_train, max_lags, dates_train_Xt),
-                                          create_lags(y_train %>% select(-sasdate), max_lags, dates_train_Xt))
-        
-      } else if (Z_name == "Z_X_MARX") {
-        Z_step[[Z_name]] <- align_by_date(create_lags(X_train, max_lags, dates_train_Xt),
-                                          marx_train,
-                                          create_lags(y_train %>% select(-sasdate), max_lags, dates_train_Xt))
-        
-      } else if (Z_name == "Z_Fstationary_X_MARX_") {
-        F_lags <- rolling_pca_lags(X_train, dates_train_Xt, nrow(X_train), max_lags, var_threshold, min_train)
-        Z_step[[Z_name]] <- align_by_date(F_lags,
-                                          create_lags(X_train, max_lags, dates_train_Xt),
-                                          marx_train,
-                                          create_lags(y_train %>% select(-sasdate), max_lags, dates_train_Xt))
-        
-      } else if (Z_name == "Z_Fraw_X_MARX_") {
-        F_lags <- rolling_pca_lags(X_raw_train, dates_train_Xtraw, nrow(X_raw_train), max_lags, var_threshold, min_train)
-        Z_step[[Z_name]] <- align_by_date(F_lags,
-                                          create_lags(X_train, max_lags, dates_train_Xt),
-                                          marx_train,
-                                          create_lags(y_train %>% select(-sasdate), max_lags, dates_train_Xt))
-      }
-    }
-    
-    all_Z[[paste0("t+", t_idx)]] <- Z_step
-  }
-  
- # return(all_Z)
-#}
 
-#saving the main variables
 
 saveRDS(y_t, file = "y_t.rds")
 saveRDS(X_t, file = "X_t.rds")

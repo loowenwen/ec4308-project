@@ -462,7 +462,7 @@ for (z_name in names(Z_list)) {
       if (sd(y_train) == 0 || all(is.na(y_train))) return(NA)
       
       model <- ic.glmnet(x = Z_train, y = y_train, alpha = alpha, crit = IC)
-      as.numeric(predict(model, Z_test))
+      as.numeric(predict(model, Z_test)) 
     }
     
     # Compute RMSE/MAE

@@ -255,7 +255,7 @@ print(unlist(list_of_non_stationary_trend))
 
 # ---------------------- 12. Train-Test Split -------------------
 # Define split date: use pre-2020 as training, post-2020 as testing
-split_date <- as.Date("2020-01-01")
+split_date <- as.Date("2017-03-01")
 
 X_train <- predictors_df %>% filter(sasdate < split_date)
 X_test <- predictors_df %>% filter(sasdate >= split_date)
@@ -274,3 +274,28 @@ write_csv(X_test, "../data/fred_test.csv")
 write_csv(y_train, "../data/y_train.csv")
 write_csv(y_test, "../data/y_test.csv")
 
+# ---------------------- 14. Initial PCA -----------------
+
+X_full <- X_train %>% select(-sasdate)
+
+# --- Run PCA (scaled) ---
+pca_full <- prcomp(X_full, scale. = TRUE)
+
+# --- PCA summary table (variance explained) ---
+pca_summary <- summary(pca_full)
+
+# Print proportion of variance explained
+importance_table <- data.frame(
+  PC = paste0("PC", seq_along(pca_summary$importance[2, ])),
+  Std_Deviation = pca_summary$importance[1, ],
+  Proportion_Variance = pca_summary$importance[2, ],
+  Cumulative_Variance = pca_summary$importance[3, ]
+)
+
+# Transpose so PCs go across columns
+importance_table_t <- t(importance_table)
+colnames(importance_table_t) <- importance_table_t[1, ]  # set first row as column names
+importance_table_t <- importance_table_t[-1, ]           # remove metric names row
+
+
+print(importance_table_t)

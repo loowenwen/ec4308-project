@@ -1,0 +1,453 @@
+---
+title: "ensemble"
+author: "Abigail"
+date: "2025-11-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load libraries}
+library(tidyverse)
+library(lsei)
+```
+
+```{r read in files}
+res_plugin_lasso <- readRDS("rlasso_results.rds")
+res_bic_lasso    <- readRDS("lasso_bic_results_100_icglm.rds")
+res_arima <- readRDS("arima_results.rds") #rmse & mae are within their own lists
+res_ridge <- readRDS("ridge_results_100.rds") #rmse & mae are within their own lists
+res_elasticnet <- readRDS("elasticnet_results_100.rds") #rmse & mae are within their own lists
+res_boosting <- readRDS("../data/boosted_all_final.rds") #rmse&mae are lists of 100 instead of 1
+res_rf <- readRDS("../data/rf_results/rf_master_results.rds")
+
+```
+
+
+```{r handle formatting and arima NAs}
+res_boosting <- lapply(res_boosting, function(z_list) {
+  lapply(z_list, function(h_list) {
+    h_list$rmse <- h_list$rmse[1]
+    h_list$mae  <- h_list$mae[1]
+    h_list
+  })
+})
+
+dename_rmse_mae <- function(res_list) { #because some rmse/mae are named num
+  # If this is a single-level (no Z nesting)
+  if (all(grepl("^h[0-9]+$", names(res_list)))) {
+    for (h in names(res_list)) {
+      if (!is.null(res_list[[h]]$rmse)) names(res_list[[h]]$rmse) <- NULL
+      if (!is.null(res_list[[h]]$mae))  names(res_list[[h]]$mae)  <- NULL
+    }
+    return(res_list)
+  }
+  
+  # Otherwise, handle the nested Z → horizon structure
+  lapply(res_list, function(z_list) {
+    lapply(z_list, function(h_list) {
+      if (!is.null(h_list$rmse)) names(h_list$rmse) <- NULL
+      if (!is.null(h_list$mae))  names(h_list$mae)  <- NULL
+      h_list
+    })
+  })
+}
+
+res_elasticnet <- dename_rmse_mae(res_elasticnet)
+res_ridge      <- dename_rmse_mae(res_ridge)
+res_arima      <- dename_rmse_mae(res_arima)
+
+align_arima_preds <- function(pred_list) {
+  lapply(pred_list, function(h_list) {
+    h_list$pred <- {
+      non_na <- h_list$pred[!is.na(h_list$pred)]
+      length(non_na) <- 100
+      non_na
+    }
+    h_list
+  })
+}
+
+res_arima <- align_arima_preds(res_arima)
+
+res_models <- list(
+  plugin_lasso = res_plugin_lasso,
+  bic_lasso    = res_bic_lasso,
+  arima        = res_arima,
+  ridge        = res_ridge,
+  elasticnet   = res_elasticnet,
+  boosting     = res_boosting,
+  rf           = res_rf
+)
+```
+
+
+```{r bests}
+get_best_models <- function(res_list) {
+  horizons <- names(res_list[[1]])  # assume all have same horizons
+  
+  best_list <- lapply(horizons, function(h) {
+    # get all rmse values for this horizon across Zs
+    all_rmse <- sapply(res_list, function(z) z[[h]]$rmse)
+    best_z <- names(which.min(all_rmse))
+    best_model <- res_list[[best_z]][[h]]
+    
+    list(
+      Z = best_z,
+      pred = best_model$pred,
+      rmse = best_model$rmse,
+      mae = best_model$mae
+    )
+  })
+  
+  names(best_list) <- horizons
+  return(best_list)
+}
+
+# apply it to each model type
+best_models_all <- lapply(res_models[!names(res_models) %in% "arima"], get_best_models)
+
+# Manually add ARIMA results in same structure
+best_models_all$arima <- lapply(names(res_models$arima), function(h) {
+  list(
+    Z = "just_X",
+    pred = res_models$arima[[h]]$pred,
+    rmse = res_models$arima[[h]]$rmse,
+    mae  = res_models$arima[[h]]$mae
+  )
+})
+names(best_models_all$arima) <- names(res_models$arima)
+
+## for table comparison
+# Flatten best_models_all
+best_models_df <- bind_rows(
+  lapply(names(best_models_all), function(model_name) {
+    lapply(names(best_models_all[[model_name]]), function(horizon_name) {
+      horizon_list <- best_models_all[[model_name]][[horizon_name]]
+      data.frame(
+        model = model_name,
+        horizon = horizon_name,
+        Z = horizon_list$Z,
+        rmse = horizon_list$rmse,
+        mae = horizon_list$mae
+      )
+    }) %>% bind_rows()
+  })
+)
+
+# Print the table
+print(best_models_df)
+```
+
+```{r existing preds}
+# Create data frame with horizons as rows, models as columns
+pred_df <- bind_rows(
+  lapply(names(best_models_all), function(model_name) {
+    lapply(names(best_models_all[[model_name]]), function(horizon_name) {
+      data.frame(
+        horizon = horizon_name,
+        model = model_name,
+        pred = I(list(best_models_all[[model_name]][[horizon_name]]$pred))
+      )
+    }) %>% bind_rows()
+  })
+) %>%
+  pivot_wider(names_from = model, values_from = pred)
+
+
+```
+
+```{r simple avg and evaluation}
+
+ensemble_df <- pred_df %>% 
+  mutate(ensemble = pmap(
+    list(arima, plugin_lasso, bic_lasso, ridge, elasticnet, boosting, rf),
+    function(arima, plugin_lasso, bic_lasso, ridge, elasticnet, boosting, rf) {
+      preds <- cbind(arima, plugin_lasso, bic_lasso, ridge, elasticnet, boosting, rf)
+      rowMeans(preds, na.rm = TRUE)
+    }
+  ))
+
+# Helper function: compute RMSE and MAE safely
+rmse <- function(actual, pred) sqrt(mean((actual - pred)^2, na.rm = TRUE))
+mae  <- function(actual, pred) mean(abs(actual - pred), na.rm = TRUE)
+
+# vars needed
+horizon_steps <- c(1,3,6,12)
+y_t = readRDS("y_t.rds")
+nprev=100
+y_h_real = tail(y_t$CPI_t,nprev)
+
+
+simple_avg <- map_dfr(horizon_steps, function(h) {
+  # Shift actuals forward by h steps to align with forecast timing
+  actuals_aligned <- dplyr::lead(y_h_real, h)
+  
+  # Extract ensemble forecasts for that horizon
+  preds <- ensemble_df %>% 
+    filter(horizon == paste0("h",h)) %>% 
+    pull(ensemble)%>% 
+  .[[1]]   # extract the numeric vector from the list
+  
+  # Trim to the same length (in case of mismatch at the end)
+  min_len <- min(length(actuals_aligned), length(preds))
+  actuals_aligned <- actuals_aligned[seq_len(min_len)]
+  preds <- preds[seq_len(min_len)]
+  
+  tibble(
+    horizon = h,
+    pred = list(preds),
+    RMSE = rmse(actuals_aligned, preds),
+    MAE = mae(actuals_aligned, preds)
+  )
+})
+
+print(simple_avg)
+```
+
+```{r GR ensemble}
+# store results
+gr_forecasts <- list()
+gr_weights   <- list()
+
+# Loop through horizons
+for(h in horizon_steps){
+  
+  # Extract numeric vectors for all models for this horizon
+  X <- ensemble_df %>%
+    filter(as.character(horizon) == paste0("h",h)) %>% 
+    select(arima, plugin_lasso, bic_lasso, ridge, elasticnet, boosting, rf) %>% 
+    unlist(recursive = FALSE) %>%    # list of 7 numeric vectors
+    do.call(cbind, .)               # form matrix: n x m (n=100 preds, m=7 models)
+  
+  # Dependent variable (actuals) aligned with horizon
+  y_h <- dplyr::lead(y_h_real, h)  # shift by horizon steps
+  
+  # Keep only rows where y_h is not NA
+  valid_rows <- which(!is.na(y_h))
+  y_h <- y_h[valid_rows]
+  X   <- X[valid_rows, , drop = FALSE]
+  
+  # Constraints: sum(beta) = 1, beta >= 0
+  c_mat <- matrix(1, nrow=1, ncol=ncol(X))  # equality constraint matrix
+  d_vec <- 1                                # equality target
+  e_mat <- diag(ncol(X))                    # inequality matrix (identity)
+  f_vec <- rep(0, ncol(X))                  # inequality rhs (>=0)
+  
+  # Solve for GR weights
+  gr_sol <- lsei(X, y_h, c = c_mat, d = d_vec, e = e_mat, f = f_vec)
+  
+  beta <- gr_sol   # weights
+  
+  # Compute GR forecast
+  gr_forecast <- X %*% beta
+  
+  # Save
+  gr_forecasts[[paste0("h", h)]] <- gr_forecast
+  gr_weights[[paste0("h", h)]]   <- beta
+}
+
+# Combine GR forecasts into a tibble
+nprev <- 100  # desired length
+
+gr_forecast_df <- bind_rows(
+  lapply(names(gr_forecasts), function(h) {
+    preds <- gr_forecasts[[h]]
+    # pad with NAs if shorter than nprev
+    if(length(preds) < nprev) {
+      preds <- c(preds, rep(NA, nprev - length(preds)))
+    }
+    tibble(
+      horizon = h,
+      gr_pred = preds
+    )
+  })
+)
+
+# GR weights per horizon
+gr_weights_df <- tibble(
+  horizon = names(gr_weights),
+  weights = I(gr_weights)
+)
+
+gr_forecast_df
+gr_weights_df
+
+
+
+# evaluating gr forecasts
+gr_eval <- map_dfr(horizon_steps, function(h) {
+  
+  # Lead the actuals by h steps
+  actuals_aligned <- dplyr::lead(y_h_real, h)
+  
+  # Extract GR predictions for this horizon
+  preds <- gr_forecast_df %>%
+    filter(horizon == paste0("h", h)) %>%
+    pull(gr_pred)
+  
+  # Trim to same length
+  min_len <- min(length(actuals_aligned), length(preds))
+  actuals_aligned <- actuals_aligned[seq_len(min_len)]
+  preds <- preds[seq_len(min_len)]
+  
+  tibble(
+    horizon = h,
+    pred = list(preds),
+    RMSE = rmse(actuals_aligned, preds),
+    MAE  = mae(actuals_aligned, preds)
+  )
+})
+
+gr_eval
+```
+
+
+```{r gr with intercept}
+# store results
+grc_forecasts <- list()
+grc_weights   <- list()
+
+# Loop through horizons
+for(h in horizon_steps){
+  
+  # Extract numeric vectors for all models for this horizon
+  X <- ensemble_df %>%
+    filter(as.character(horizon) == paste0("h",h)) %>% 
+    select(arima, plugin_lasso, bic_lasso, ridge, elasticnet, boosting, rf) %>% 
+    unlist(recursive = FALSE) %>%    # list of 7 numeric vectors
+    do.call(cbind, .)               # form matrix: n x m (n=100 preds, m=7 models)
+  
+  # Add a column of 1s for constant
+  X <- cbind(const = 1, X)
+  
+  # Dependent variable (actuals) aligned with horizon
+  y_h <- dplyr::lead(y_h_real, h)  # shift by horizon steps
+  
+  # Keep only rows where y_h is not NA
+  valid_rows <- which(!is.na(y_h))
+  y_h <- y_h[valid_rows]
+  X   <- X[valid_rows, , drop = FALSE]
+  
+  # Constraints: sum(beta excluding constant) = 1, beta >= 0 for models, constant unconstrained
+  n_models <- ncol(X) - 1
+  c_mat <- matrix(c(0, rep(1, n_models)), nrow = 1)  # sum of model weights = 1
+  d_vec <- 1
+  e_mat <- diag(ncol(X))
+  e_mat[1,1] <- 0        # allow constant to be negative/unconstrained
+  f_vec <- rep(0, ncol(X))
+  
+  # Solve for GR weights with constant
+  gr_sol <- lsei(X, y_h, c = c_mat, d = d_vec, e = e_mat, f = f_vec)
+  
+  beta <- gr_sol   # weights
+  
+  # Compute GR forecast
+  gr_forecast <- X %*% beta
+  
+  # Save
+  grc_forecasts[[paste0("h", h)]] <- gr_forecast
+  grc_weights[[paste0("h", h)]]   <- beta
+}
+
+# Combine GRC forecasts into a tibble
+grc_forecast_df <- bind_rows(
+  lapply(names(grc_forecasts), function(h) {
+    preds <- grc_forecasts[[h]]
+    if(length(preds) < nprev) {
+      preds <- c(preds, rep(NA, nprev - length(preds)))
+    }
+    tibble(
+      horizon = h,
+      grc_pred = preds
+    )
+  })
+)
+
+# GRC weights per horizon
+grc_weights_df <- tibble(
+  horizon = names(grc_weights),
+  weights = I(grc_weights)
+)
+
+grc_forecast_df
+grc_weights_df
+```
+
+
+```{r compare ensemble results to other models}
+# Add simple average results
+simple_avg_df <- simple_avg %>%
+  mutate(
+    model = "simple_avg",
+    Z = "all",
+    horizon = paste0("h", horizon)
+  ) 
+
+# Add GR ensemble results
+gr_eval_df <- gr_eval %>%
+  mutate(
+    model = "gr_ensemble",
+    Z = "all",
+    horizon = paste0("h", horizon)
+  ) 
+
+##COMPARE BASED ON ERRORS
+# Combine with best_models_df
+combined_results <- bind_rows(best_models_df, simple_avg_df %>%
+  select(model, horizon, Z, rmse = RMSE, mae = MAE), gr_eval_df%>%
+  select(model, horizon, Z, rmse = RMSE, mae = MAE)) %>%
+  group_by(horizon) %>%
+  arrange(rmse, .by_group = TRUE) %>%
+  ungroup()
+
+saveRDS(combined_results, "all_best_models_rmse.rds")
+
+```
+
+
+```{r ALL BEST MODELS PREDS}
+# helper fn
+add_model_to_best_models_all <- function(best_models_all, model_name, metric_df) {
+  # Ensure horizon names match existing pattern
+  h_names <- metric_df$horizon
+  
+  # Construct nested list per horizon
+  best_models_all[[model_name]] <- setNames(
+    lapply(seq_along(h_names), function(i) {
+      list(
+        Z    = "all",
+        pred = metric_df$pred[[i]],
+        rmse = metric_df$RMSE[i],
+        mae  = metric_df$MAE[i]
+      )
+    }),
+    h_names
+  )
+  
+  return(best_models_all)
+}
+
+
+# Add simple average
+best_models_all <- add_model_to_best_models_all(
+  best_models_all,
+  "simple_avg",
+  simple_avg_df
+)
+
+# Add GR ensemble
+best_models_all <- add_model_to_best_models_all(
+  best_models_all,
+  "gr_ensemble",
+  gr_eval_df
+)
+
+# Check
+str(best_models_all[c("simple_avg","gr_ensemble")])
+
+
+```
+
